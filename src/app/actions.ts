@@ -93,9 +93,12 @@ export async function prepareOpportunityKit(oppId: number, profile?: Profile): P
 }
 
 export async function prepareOutreachDraft(oppId: number, profile?: Profile): Promise<number> {
-  const existing = await queryOne<{ id: number }>("SELECT id FROM outreach WHERE opportunity_id=$1", [oppId]);
-  if (existing) return existing.id;
   const [p, opp] = await Promise.all([profile ? Promise.resolve(profile) : getProfile(), getOpp(oppId)]);
+  const existing = await queryOne<{ id: number }>(
+    "SELECT id FROM outreach WHERE opportunity_id=$1 OR LOWER(company_name)=LOWER($2) LIMIT 1",
+    [oppId, opp.company_name]
+  );
+  if (existing) return existing.id;
   const target = inferOutreachTarget(opp);
   let draft;
   try {
@@ -105,6 +108,7 @@ export async function prepareOutreachDraft(oppId: number, profile?: Profile): Pr
   } catch {
     draft = fallbackOutreach(p, opp, { name: target.name });
   }
+  const verifiedEmail = target.inferred ? null : target.email || null;
   const row = await queryOne<{ id: number }>(
     `INSERT INTO outreach (opportunity_id, company_name, contact_name, contact_role, contact_email, subject, body, send_log)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
@@ -113,10 +117,12 @@ export async function prepareOutreachDraft(oppId: number, profile?: Profile): Pr
       opp.company_name,
       target.name,
       target.role,
-      target.email || null,
+      verifiedEmail,
       draft.subject,
       draft.body,
-      target.inferred ? "Recipient email auto-inferred from company domain — verify before tapping Send." : "Recipient email extracted from JD.",
+      verifiedEmail
+        ? "Recipient email extracted directly from the job description."
+        : "Paste the verified founder/hiring manager email before tapping Send.",
     ]
   );
   await logEvent("outreach", row!.id, `Auto-drafted outreach for ${opp.company_name}`);
@@ -126,6 +132,22 @@ export async function prepareOutreachDraft(oppId: number, profile?: Profile): Pr
 /** Batch auto-prepares Application Kits + Outreach Drafts for top S/A matches so they wait in the Approval Queue. */
 export async function autoPrepareQueue(limit = 6): Promise<{ appsPrepared: number; outreachPrepared: number }> {
   const profile = await getProfile();
+
+  // Remove any unsubmitted kits tied to opportunities that were rejected/skipped or built with an empty profile
+  await query(
+    `DELETE FROM applications WHERE status IN ('READY', 'DRAFT')
+     AND opportunity_id IN (SELECT id FROM opportunities WHERE status = 'SKIPPED' OR tier = 'SKIP')`
+  );
+  await query(
+    `DELETE FROM outreach WHERE status = 'DRAFT'
+     AND (contact_email LIKE 'founders@%' OR opportunity_id IN (SELECT id FROM opportunities WHERE status = 'SKIPPED' OR tier = 'SKIP'))`
+  );
+
+  // Do not generate placeholder "Your Name" kits if the user hasn't filled in their profile yet
+  if (!profile.name && profile.skills.length === 0) {
+    await query("DELETE FROM applications WHERE status IN ('READY', 'DRAFT')");
+    return { appsPrepared: 0, outreachPrepared: 0 };
+  }
 
   // Upgrade any existing READY/DRAFT applications that were rendered before the LaTeX engine upgrade
   const legacyApps = await query<{ id: number; opportunity_id: number; resume_variant: string | null }>(
@@ -145,7 +167,7 @@ export async function autoPrepareQueue(limit = 6): Promise<{ appsPrepared: numbe
   const topOpps = await query<Opportunity>(
     `SELECT o.* FROM opportunities o
      LEFT JOIN applications a ON a.opportunity_id = o.id
-     WHERE o.status = 'NEW' AND a.id IS NULL
+     WHERE o.status = 'NEW' AND o.tier IN ('S', 'A', 'B') AND a.id IS NULL
      ORDER BY o.score DESC NULLS LAST LIMIT $1`,
     [limit]
   );

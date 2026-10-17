@@ -115,7 +115,7 @@ export async function runDiscovery(): Promise<DiscoveryReport> {
 export async function rescoreAll(): Promise<number> {
   const profile = await getProfile();
   const rows = await query<any>(
-    "SELECT id, company_name, title, url, source, location, description, salary_text FROM opportunities WHERE status IN ('NEW','REVIEWING','SKIPPED')"
+    "SELECT id, company_name, title, url, source, location, description, salary_text FROM opportunities WHERE status IN ('NEW','REVIEWING','SKIPPED','APPLYING')"
   );
   for (const o of rows) {
     const fit: FitReport = analyzeJob(
@@ -132,7 +132,11 @@ export async function rescoreAll(): Promise<number> {
     );
     await query(
       `UPDATE opportunities SET fit=$2::jsonb, score=$3, verdict=$4, tier=$5,
-         status = CASE WHEN status='SKIPPED' AND $4 <> 'SKIP' THEN 'NEW' WHEN $4='SKIP' AND status='NEW' THEN 'SKIPPED' ELSE status END
+         status = CASE
+           WHEN status='SKIPPED' AND $4 <> 'SKIP' THEN 'NEW'
+           WHEN $4='SKIP' AND status IN ('NEW','APPLYING','REVIEWING') THEN 'SKIPPED'
+           ELSE status
+         END
        WHERE id=$1`,
       [o.id, JSON.stringify(fit), fit.score, fit.verdict, fit.tier]
     );

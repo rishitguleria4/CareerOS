@@ -25,13 +25,21 @@ const INDIA = /\bindia\b|bangalore|bengaluru|hyderabad|mumbai|pune|delhi|gurgaon
 const REMOTE_WORD = /\bremote\b|work from home|wfh|fully distributed/i;
 const HYBRID_ONSITE = /\bhybrid\b|on-?site|in[- ]office|in the office|relocat/i;
 
+const NON_INDIA_LOC =
+  /\b(united states|u\.s\.a?\.?|\bus\b|canada|uk\b|united kingdom|england|london|germany|berlin|munich|france|paris|europe|\beu\b|emea|amer\b|americas|latam|latin america|australia|sydney|melbourne|japan|tokyo|dublin|ireland|amsterdam|netherlands|spain|madrid|barcelona|italy|poland|sweden|switzerland|zurich|israel|tel aviv|brazil|mexico|san francisco|new york|nyc|foster city|mountain view|palo alto|menlo park|sunnyvale|san jose|seattle|bellevue|austin|boston|chicago|los angeles|denver|atlanta|washington|toronto|vancouver|montreal)\b|,\s*(ca|ny|wa|tx|ma|il|co|ga|va|dc|fl|pa|oh|nc|on|bc)\b/i;
+
 export function analyzeRemote(job: RawJob) {
-  const loc = job.location ?? "";
-  const head = `${loc}\n${job.title}\n${(job.description ?? "").slice(0, 6000)}`;
+  const loc = (job.location ?? "").trim();
+  const titleAndLoc = `${loc}\n${job.title}`;
+  const head = `${titleAndLoc}\n${(job.description ?? "").slice(0, 6000)}`;
   const reasons: string[] = [];
   const mentionsIndia = INDIA.test(head);
   const worldwide = WORLDWIDE.test(head) || /\b(worldwide|anywhere|global)\b/i.test(loc);
-  const remote = job.remoteFlag === true || REMOTE_WORD.test(head);
+  const remote =
+    job.remoteFlag === true ||
+    REMOTE_WORD.test(titleAndLoc) ||
+    /\b(fully remote|100% remote|remote[- ]first|work from anywhere|remote role|remote position)\b/i.test(head);
+  const locHasNonIndia = NON_INDIA_LOC.test(loc) && !INDIA.test(loc) && !/\b(worldwide|anywhere|global)\b/i.test(loc);
   const usOnly = US_ONLY.test(head);
   const otherRegion = OTHER_REGION.test(head);
   const onsite = !remote && (HYBRID_ONSITE.test(head) || (loc !== "" && !/remote/i.test(loc)));
@@ -40,7 +48,17 @@ export function analyzeRemote(job: RawJob) {
   let eligible: "yes" | "likely" | "unknown" | "no" = "unknown";
   let note = "";
 
-  if (usOnly && !worldwide && !mentionsIndia) {
+  if (locHasNonIndia) {
+    if (remote) {
+      cls = "restricted";
+      eligible = "no";
+      note = `Remote restricted to non-India region (${loc})`;
+    } else {
+      cls = "onsite";
+      eligible = "no";
+      note = `On-site/hybrid outside India (${loc})`;
+    }
+  } else if (usOnly && !worldwide && !mentionsIndia) {
     cls = "restricted";
     eligible = "no";
     note = "US-only / US work authorization required";

@@ -110,17 +110,16 @@ export function computeAtsScore(tex: string, profile: Profile, jobText: string):
 
   // 4. Verified JD keyword density (30 pts)
   if (jdSkills.length === 0) {
-    score += 28;
-    checks.push("Full profile keyword coverage");
+    score += profile.skills.length > 0 ? 25 : 0;
+    checks.push("Profile keyword coverage");
   } else {
-    // Score against skills the candidate actually possesses or matches
-    const ratio = Math.min(1, matchedKeywords.length / Math.max(1, Math.min(jdSkills.length, 6)));
-    score += Math.round(18 + ratio * 12);
+    const ratio = Math.min(1, matchedKeywords.length / jdSkills.length);
+    score += Math.round(ratio * 30);
     checks.push(`${matchedKeywords.length}/${jdSkills.length} JD technical keywords embedded`);
   }
 
   return {
-    score: Math.min(100, Math.max(85, score)),
+    score: Math.min(100, Math.max(0, score)),
     matchedKeywords,
     missingKeywords,
     checks,
