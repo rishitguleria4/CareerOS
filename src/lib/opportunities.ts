@@ -91,7 +91,7 @@ export async function runDiscovery(): Promise<DiscoveryReport> {
   const sources = (await getSources()).filter((s) => s.enabled);
   const report: DiscoveryReport = { sources: [], inserted: 0, duplicates: 0 };
 
-  const BATCH = 15;
+  const BATCH = 8;
   for (let start = 0; start < sources.length; start += BATCH) {
     const chunk = sources.slice(start, start + BATCH);
     const fetched = await Promise.allSettled(chunk.map((s) => fetchSource(s.kind, s.slug)));
