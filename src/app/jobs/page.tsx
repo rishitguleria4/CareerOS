@@ -19,6 +19,7 @@ const VIEWS: { key: string; label: string; sub: string }[] = [
   { key: "strong", label: "Strong Fit", sub: "Tier S/A · ≥70%" },
   { key: "open", label: "All Qualifying", sub: "Tier S/A/B" },
   { key: "outreach", label: "Outreach-First", sub: "Founder-led / high outreach signal" },
+  { key: "unavailable", label: "Closed / Unavailable", sub: "Removed from ATS board or 404/closed" },
   { key: "skipped", label: "Filtered Out", sub: "Non-India onsite / US-only / Senior" },
 ];
 
@@ -41,6 +42,8 @@ export default async function Jobs({
     where.push("o.status IN ('NEW','REVIEWING','APPLYING') AND o.verdict <> 'SKIP'");
   } else if (view === "outreach") {
     where.push("o.status IN ('NEW','REVIEWING','OUTREACH','APPLYING') AND o.fit->>'action' LIKE '%OUTREACH%'");
+  } else if (view === "unavailable") {
+    where.push("o.status = 'UNAVAILABLE'");
   } else if (view === "skipped") {
     where.push("o.status = 'SKIPPED'");
   }
@@ -63,6 +66,7 @@ export default async function Jobs({
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','APPLYING') AND ${qualifyingWhere(MATCH_PRESETS.strong)}) AS strong,
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','APPLYING') AND o.verdict <> 'SKIP') AS open,
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','OUTREACH','APPLYING') AND o.fit->>'action' LIKE '%OUTREACH%') AS outreach,
+      (SELECT COUNT(*)::int FROM opportunities o WHERE o.status = 'UNAVAILABLE') AS unavailable,
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status = 'SKIPPED') AS skipped`),
   ]);
 
@@ -71,6 +75,7 @@ export default async function Jobs({
     strong: counts?.strong ?? 0,
     open: counts?.open ?? 0,
     outreach: counts?.outreach ?? 0,
+    unavailable: counts?.unavailable ?? 0,
     skipped: counts?.skipped ?? 0,
   };
 

@@ -16,7 +16,7 @@ import {
   tailorPlan,
 } from "@/lib/gemini";
 import { inferOutreachTarget, sendDirectEmail } from "@/lib/mailer";
-import { ingest, rescoreAll, runDiscovery } from "@/lib/opportunities";
+import { ingest, rescoreAll, runDiscovery, verifyOpportunityAvailable } from "@/lib/opportunities";
 import { generateResumePdf } from "@/lib/pdf";
 import { DEFAULT_PROFILE, getProfile, saveProfile } from "@/lib/profile";
 import { pickVariant, renderResume, VARIANTS, type TailorPlan, type VariantKey } from "@/lib/resume";
@@ -142,14 +142,14 @@ export async function autoPrepareQueue(
   const appsTarget = override?.apps ?? settings.appsPerRun;
   const outreachTarget = override?.outreach ?? settings.outreachPerRun;
 
-  // Remove any unsubmitted kits tied to opportunities that were rejected/skipped or built with an empty profile
+  // Remove any unsubmitted kits tied to opportunities that were skipped or became unavailable
   await query(
     `DELETE FROM applications WHERE status IN ('READY', 'DRAFT')
-     AND opportunity_id IN (SELECT id FROM opportunities WHERE status = 'SKIPPED' OR tier = 'SKIP')`
+     AND opportunity_id IN (SELECT id FROM opportunities WHERE status IN ('SKIPPED', 'UNAVAILABLE') OR tier = 'SKIP')`
   );
   await query(
     `DELETE FROM outreach WHERE status = 'DRAFT'
-     AND (contact_email LIKE 'founders@%' OR opportunity_id IN (SELECT id FROM opportunities WHERE status = 'SKIPPED' OR tier = 'SKIP'))`
+     AND (contact_email LIKE 'founders@%' OR opportunity_id IN (SELECT id FROM opportunities WHERE status IN ('SKIPPED', 'UNAVAILABLE') OR tier = 'SKIP'))`
   );
 
   // Upgrade any existing READY/DRAFT applications that were rendered before the LaTeX engine upgrade
@@ -171,21 +171,27 @@ export async function autoPrepareQueue(
 
   const where = qualifyingWhere(settings.preset);
 
-  // Applications: best-fit first (tier → confirmed India eligibility → fit score), only roles that pass the preset
+  // Applications: best-fit first (tier → confirmed India eligibility → fit score), verified live before staging
   let appsPrepared = 0;
   if (appsTarget > 0) {
-    const topOpps = await query<Opportunity>(
+    const candidates = await query<Opportunity>(
       `SELECT o.* FROM opportunities o
        LEFT JOIN applications a ON a.opportunity_id = o.id
        WHERE o.status = 'NEW' AND a.id IS NULL AND ${where}
        ORDER BY ${BEST_FIT_ORDER} LIMIT $1`,
-      [appsTarget]
+      [appsTarget * 2]
     );
-    await Promise.all(topOpps.map((opp) => prepareOpportunityKit(opp.id, profile)));
-    appsPrepared = topOpps.length;
+    const liveApps: Opportunity[] = [];
+    for (const opp of candidates) {
+      if (liveApps.length >= appsTarget) break;
+      const alive = await verifyOpportunityAvailable(opp.id, opp.url);
+      if (alive) liveApps.push(opp);
+    }
+    await Promise.all(liveApps.map((opp) => prepareOpportunityKit(opp.id, profile)));
+    appsPrepared = liveApps.length;
   }
 
-  // Outreach: one draft per company, founder-led / outreach-first roles first, then the same best-fit order
+  // Outreach: one draft per company, founder-led / outreach-first roles first, verified live before staging
   let outreachPrepared = 0;
   if (outreachTarget > 0) {
     const outreachOpps = await query<Opportunity>(
@@ -205,6 +211,8 @@ export async function autoPrepareQueue(
       if (chosen.length >= outreachTarget) break;
       const key = opp.company_name.toLowerCase();
       if (seen.has(key)) continue;
+      const alive = await verifyOpportunityAvailable(opp.id, opp.url);
+      if (!alive) continue;
       seen.add(key);
       chosen.push(opp);
     }
