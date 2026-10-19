@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { runDiscovery } from "@/lib/opportunities";
+import { rescoreAll, runDiscovery } from "@/lib/opportunities";
 import { autoPrepareQueue } from "@/app/actions";
+import { getProfile, saveProfile } from "@/lib/profile";
+import { query } from "@/lib/db";
 
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
@@ -15,8 +17,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "CRON_SECRET not set" }, { status: 401 });
   }
   const prepOnly = req.nextUrl.searchParams.get("prepOnly") === "1";
-  const report = prepOnly ? null : await runDiscovery();
-  const prep = await autoPrepareQueue(6);
-  return NextResponse.json({ report, prep });
-}
+  const doRescore = req.nextUrl.searchParams.get("rescore") === "1";
 
+  // Ensure default positioning/stack/compensation tiers are persisted
+  const profile = await getProfile();
+  await saveProfile(profile);
+
+  const rescored = doRescore ? await rescoreAll() : 0;
+  const report = prepOnly ? null : await runDiscovery();
+  const prep = await autoPrepareQueue();
+  const tiers = await query<{ tier: string; count: number }>(
+    "SELECT tier, COUNT(*)::int AS count FROM opportunities GROUP BY tier ORDER BY tier"
+  );
+  return NextResponse.json({ rescored, tiers, report, prep });
+}

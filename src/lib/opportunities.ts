@@ -91,21 +91,25 @@ export async function runDiscovery(): Promise<DiscoveryReport> {
   const sources = (await getSources()).filter((s) => s.enabled);
   const report: DiscoveryReport = { sources: [], inserted: 0, duplicates: 0 };
 
-  const fetched = await Promise.allSettled(sources.map((s) => fetchSource(s.kind, s.slug)));
-  for (let i = 0; i < sources.length; i++) {
-    const s = sources[i];
-    const res = fetched[i];
-    const label = `${s.kind}:${s.slug}`;
-    if (res.status === "rejected") {
-      report.sources.push({ name: label, found: 0, inserted: 0, error: String(res.reason?.message ?? res.reason) });
-      await query("UPDATE sources SET last_run = NOW(), last_found = 0 WHERE id = $1", [s.id]);
-      continue;
+  const BATCH = 15;
+  for (let start = 0; start < sources.length; start += BATCH) {
+    const chunk = sources.slice(start, start + BATCH);
+    const fetched = await Promise.allSettled(chunk.map((s) => fetchSource(s.kind, s.slug)));
+    for (let i = 0; i < chunk.length; i++) {
+      const s = chunk[i];
+      const res = fetched[i];
+      const label = `${s.kind}:${s.slug}`;
+      if (res.status === "rejected") {
+        report.sources.push({ name: label, found: 0, inserted: 0, error: String(res.reason?.message ?? res.reason) });
+        await query("UPDATE sources SET last_run = NOW(), last_found = 0 WHERE id = $1", [s.id]);
+        continue;
+      }
+      const r = await ingest(res.value, profile);
+      report.inserted += r.inserted;
+      report.duplicates += r.duplicates;
+      report.sources.push({ name: label, found: res.value.length, inserted: r.inserted });
+      await query("UPDATE sources SET last_run = NOW(), last_found = $2 WHERE id = $1", [s.id, res.value.length]);
     }
-    const r = await ingest(res.value, profile);
-    report.inserted += r.inserted;
-    report.duplicates += r.duplicates;
-    report.sources.push({ name: label, found: res.value.length, inserted: r.inserted });
-    await query("UPDATE sources SET last_run = NOW(), last_found = $2 WHERE id = $1", [s.id, res.value.length]);
   }
   await logEvent("discovery", null, `Inserted ${report.inserted}, duplicates merged ${report.duplicates}`);
   return report;
@@ -117,28 +121,34 @@ export async function rescoreAll(): Promise<number> {
   const rows = await query<any>(
     "SELECT id, company_name, title, url, source, location, description, salary_text FROM opportunities WHERE status IN ('NEW','REVIEWING','SKIPPED','APPLYING')"
   );
-  for (const o of rows) {
-    const fit: FitReport = analyzeJob(
-      {
-        company: o.company_name,
-        title: o.title,
-        url: o.url,
-        source: o.source,
-        location: o.location ?? undefined,
-        description: o.description ?? undefined,
-        salaryText: o.salary_text ?? undefined,
-      },
-      profile
-    );
-    await query(
-      `UPDATE opportunities SET fit=$2::jsonb, score=$3, verdict=$4, tier=$5,
-         status = CASE
-           WHEN status='SKIPPED' AND $4 <> 'SKIP' THEN 'NEW'
-           WHEN $4='SKIP' AND status IN ('NEW','APPLYING','REVIEWING') THEN 'SKIPPED'
-           ELSE status
-         END
-       WHERE id=$1`,
-      [o.id, JSON.stringify(fit), fit.score, fit.verdict, fit.tier]
+  const CHUNK = 50;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const slice = rows.slice(i, i + CHUNK);
+    await Promise.all(
+      slice.map((o) => {
+        const fit: FitReport = analyzeJob(
+          {
+            company: o.company_name,
+            title: o.title,
+            url: o.url,
+            source: o.source,
+            location: o.location ?? undefined,
+            description: o.description ?? undefined,
+            salaryText: o.salary_text ?? undefined,
+          },
+          profile
+        );
+        return query(
+          `UPDATE opportunities SET fit=$2::jsonb, score=$3, verdict=$4, tier=$5,
+             status = CASE
+               WHEN status='SKIPPED' AND $4 <> 'SKIP' THEN 'NEW'
+               WHEN $4='SKIP' AND status IN ('NEW','APPLYING','REVIEWING') THEN 'SKIPPED'
+               ELSE status
+             END
+           WHERE id=$1`,
+          [o.id, JSON.stringify(fit), fit.score, fit.verdict, fit.tier]
+        );
+      })
     );
   }
   return rows.length;

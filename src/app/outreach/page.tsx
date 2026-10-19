@@ -8,7 +8,7 @@ import {
   saveOutreachAction,
   setOutreachStatusAction,
 } from "@/app/actions";
-import { Empty, PageHeader, Pill, fieldCls, linkBtn } from "@/components/bits";
+import { Empty, PageHeader, Pill, fieldCls, ghostBtn, linkBtn } from "@/components/bits";
 import { CopyButton, Submit } from "@/components/client-bits";
 import { query } from "@/lib/db";
 import { hasDirectEmailConfig } from "@/lib/mailer";
@@ -26,22 +26,24 @@ export default async function OutreachPage() {
   const emailConfigured = hasDirectEmailConfig(profile);
 
   return (
-    <div>
+    <div className="space-y-6">
       <PageHeader
-        title="Outreach — 1-Tap Preview & Send"
+        eyebrow="Direct Founder &amp; CTO Channel · Automated Cadence"
+        title="Founder Outreach"
         sub={
           emailConfigured
-            ? "Direct SMTP is active. Review any draft and tap 'Approve & Send Email Now' to send immediately and schedule follow-ups (Day 4 → Day 10 → Dormant)."
-            : "Add your Gmail + 16-char App Password in Profile for 1-tap direct sending, or use 'Open in mail app'."
+            ? "Direct SMTP is active. Approve any draft to send immediately with your tailored ATS PDF resume and schedule Day +4 and Day +10 follow-ups."
+            : "Configure your Gmail App Password in Mandate & Sources for 1-tap sending, or open any draft directly in your mail client."
         }
       />
+
       {items.length === 0 ? (
         <Empty>
-          No outreach drafts yet. Click <b>⚡ Auto-Prepare Top Matches</b> on the{" "}
-          <Link href="/dashboard" className="underline">
-            Dashboard
+          No founder outreach drafts staged yet. Click <b>Prepare Batch</b> on the{" "}
+          <Link href="/dashboard" className="font-medium text-foreground underline">
+            Command Queue
           </Link>{" "}
-          or draft one from any job page.
+          or generate one from any Opportunity dossier.
         </Empty>
       ) : (
         <div className="space-y-4">
@@ -53,50 +55,62 @@ export default async function OutreachPage() {
                 key={o.id}
                 id={`o${o.id}`}
                 action={approveAndSendOutreachAction.bind(null, o.id)}
-                className="space-y-3 rounded-xl border p-4"
+                className="space-y-3.5 rounded-lg border border-border bg-card p-5"
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold">{o.company_name}</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-serif text-xl text-foreground">{o.company_name}</span>
                     <Pill tone={o.status === "REPLIED" ? "good" : o.status === "SENT" ? "info" : "muted"}>
                       {o.status}
                     </Pill>
-                    {o.sent_at && <span className="text-xs text-muted-foreground">sent {fmtDate(o.sent_at)}</span>}
+                    {o.sent_at && (
+                      <span className="font-mono text-[11px] text-muted-foreground">sent {fmtDate(o.sent_at)}</span>
+                    )}
                     {o.next_followup_at && o.status === "SENT" && (
-                      <span className={`text-xs ${due ? "font-medium text-orange-600" : "text-muted-foreground"}`}>
-                        follow-up {fmtDate(o.next_followup_at)}
-                      </span>
+                      <Pill tone={due ? "warn" : "muted"}>follow-up {fmtDate(o.next_followup_at)}</Pill>
                     )}
                   </div>
-                  {o.opportunity_id && (
-                    <a className="text-xs underline" href={`/jobs/${o.opportunity_id}`}>
-                      view job
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(o.company_name)}%20founder%20OR%20CTO`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={linkBtn}
+                    >
+                      LinkedIn Founder Search ↗
                     </a>
-                  )}
+                    {o.opportunity_id && (
+                      <Link className={ghostBtn} href={`/jobs/${o.opportunity_id}`}>
+                        Role Dossier →
+                      </Link>
+                    )}
+                  </div>
                 </div>
 
                 {o.send_log && (
-                  <div className="rounded-lg bg-sky-50 px-3 py-1.5 text-xs text-sky-900">{o.send_log}</div>
+                  <div className="rounded border border-border bg-muted/50 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+                    {o.send_log}
+                  </div>
                 )}
 
-                <div className="grid gap-2 md:grid-cols-4">
+                <div className="grid gap-2.5 md:grid-cols-4">
                   <input
                     name="contact_name"
                     defaultValue={o.contact_name ?? ""}
-                    placeholder="Name"
+                    placeholder="Recipient Name"
                     className={fieldCls}
                   />
                   <input
                     name="contact_role"
                     defaultValue={o.contact_role ?? ""}
-                    placeholder="Role"
+                    placeholder="Role (Founder / CTO)"
                     className={fieldCls}
                   />
                   <input
                     name="contact_email"
                     defaultValue={o.contact_email ?? ""}
-                    placeholder="Email (required for 1-tap send)"
-                    className={fieldCls}
+                    placeholder="Verified email (required to send)"
+                    className={fieldCls + " font-mono text-xs"}
                   />
                   <input
                     name="contact_url"
@@ -105,39 +119,43 @@ export default async function OutreachPage() {
                     className={fieldCls}
                   />
                 </div>
-                <input name="subject" defaultValue={o.subject ?? ""} className={fieldCls} />
-                <textarea name="body" defaultValue={o.body ?? ""} rows={8} className={fieldCls} />
-                <div className="flex flex-wrap items-center gap-2">
+                <input name="subject" defaultValue={o.subject ?? ""} placeholder="Subject line" className={fieldCls} />
+                <textarea name="body" defaultValue={o.body ?? ""} rows={7} className={fieldCls} />
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   {o.status === "DRAFT" && (
                     <>
-                      <Submit className="bg-sky-600 text-white hover:bg-sky-700" pendingText="Sending email…">
-                        📨 Approve & Send Email Now
+                      <Submit
+                        className="bg-[var(--brand)] text-[var(--brand-ink)] hover:opacity-95"
+                        pendingText="Sending email…"
+                      >
+                        Approve &amp; Send Email
                       </Submit>
                       <label className="flex items-center gap-1.5 px-2 text-xs text-muted-foreground">
-                        <input type="checkbox" name="attach_resume" defaultChecked className="rounded" />
-                        Attach tailored PDF resume
+                        <input type="checkbox" name="attach_resume" defaultChecked className="rounded border-border" />
+                        Attach tailored ATS PDF resume
                       </label>
                     </>
                   )}
                   <button formAction={saveOutreachAction.bind(null, o.id)} className={linkBtn}>
-                    Save edits
+                    Save Edits
                   </button>
-                  <CopyButton text={o.body ?? ""} label="Copy body" />
+                  <CopyButton text={o.body ?? ""} label="Copy Body" />
                   <a href={mailto} className={linkBtn}>
-                    Open in mail app ↗
+                    Open in Mail App ↗
                   </a>
                   {o.status === "DRAFT" && (
                     <button formAction={markOutreachSentAction.bind(null, o.id)} className={linkBtn}>
-                      Mark sent manually
+                      Mark Sent Manually
                     </button>
                   )}
                   {o.status === "SENT" && (
                     <>
                       <button
                         formAction={approveAndSendFollowupAction.bind(null, o.id)}
-                        className="inline-flex h-8 items-center justify-center rounded-lg bg-orange-600 px-3 text-sm font-medium text-white hover:bg-orange-700"
+                        className="inline-flex h-8 items-center justify-center rounded-md bg-[var(--brand)] px-3 text-xs font-medium text-[var(--brand-ink)] hover:opacity-95"
                       >
-                        📨 Approve & Auto-Send {o.followup_count === 0 ? "Follow-up #1" : "Final Follow-up"}
+                        Approve &amp; Send {o.followup_count === 0 ? "Follow-Up #1" : "Final Follow-Up"}
                       </button>
                       <button
                         formAction={regenerateOutreachAction.bind(
@@ -147,22 +165,19 @@ export default async function OutreachPage() {
                         )}
                         className={linkBtn}
                       >
-                        Preview {o.followup_count === 0 ? "follow-up" : "final note"} text
+                        Draft {o.followup_count === 0 ? "Follow-Up #1" : "Final Note"} Copy
                       </button>
                       <button formAction={outreachFollowupSentAction.bind(null, o.id)} className={linkBtn}>
-                        Logged follow-up #{o.followup_count + 1}
+                        Log Follow-Up #{o.followup_count + 1}
                       </button>
                       <button formAction={setOutreachStatusAction.bind(null, o.id, "REPLIED")} className={linkBtn}>
-                        Got reply
+                        Mark Replied
                       </button>
                     </>
                   )}
                   {o.status !== "DORMANT" && (
-                    <button
-                      formAction={setOutreachStatusAction.bind(null, o.id, "DORMANT")}
-                      className="h-8 rounded-lg px-2 text-xs text-muted-foreground hover:bg-muted"
-                    >
-                      Dormant
+                    <button formAction={setOutreachStatusAction.bind(null, o.id, "DORMANT")} className={ghostBtn}>
+                      Archive
                     </button>
                   )}
                 </div>

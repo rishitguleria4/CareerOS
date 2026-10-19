@@ -6,9 +6,8 @@ import {
   setOppStatusAction,
   startApplicationAction,
 } from "@/app/actions";
-import { Pill, TierBadge, fieldCls, linkBtn } from "@/components/bits";
+import { Pill, TierBadge, fieldCls, ghostBtn, linkBtn } from "@/components/bits";
 import { Submit } from "@/components/client-bits";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { query, queryOne } from "@/lib/db";
 import type { Opportunity } from "@/lib/types";
 import { cn, fmtDate } from "@/lib/utils";
@@ -17,15 +16,18 @@ export const dynamic = "force-dynamic";
 
 function Bar({ label, v }: { label: string; v: number }) {
   return (
-    <div className="flex items-center gap-3 text-sm">
-      <div className="w-36 text-muted-foreground">{label}</div>
-      <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+    <div className="flex items-center gap-3 text-xs">
+      <div className="w-40 text-muted-foreground">{label}</div>
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
         <div
-          className={cn("h-full", v >= 80 ? "bg-emerald-500" : v >= 55 ? "bg-amber-500" : "bg-red-400")}
+          className={cn(
+            "h-full transition-all",
+            v >= 80 ? "bg-[var(--brand)]" : v >= 55 ? "bg-foreground/70" : "bg-[var(--bad)]"
+          )}
           style={{ width: `${v}%` }}
         />
       </div>
-      <div className="w-10 text-right font-mono text-xs">{v}%</div>
+      <div className="w-10 text-right font-mono text-[11px] tnum">{v}%</div>
     </div>
   );
 }
@@ -51,131 +53,210 @@ export default async function JobPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-5">
         <div className="flex items-start gap-3">
-          <TierBadge tier={o.tier} />
+          <div className="mt-1">
+            <TierBadge tier={o.tier} />
+          </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{o.title}</h1>
-            <p className="text-sm text-muted-foreground">
-              {o.company_name} · {o.location || "—"} · first seen {fmtDate(o.first_seen)} · on {(o.seen_on ?? [o.source]).join(", ")}
+            <div className="eyebrow mb-1">{o.company_name} · Opportunity Dossier</div>
+            <h1 className="font-serif text-[28px] leading-tight tracking-tight text-foreground">{o.title}</h1>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {o.location || "Remote"} · first indexed {fmtDate(o.first_seen)} · source:{" "}
+              {(o.seen_on ?? [o.source]).join(", ")}
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <a href={o.url} target="_blank" rel="noreferrer" className={linkBtn}>Open posting ↗</a>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/jobs" className={ghostBtn}>
+            ← Back
+          </Link>
+          <a href={o.url} target="_blank" rel="noreferrer" className={linkBtn}>
+            Original Posting ↗
+          </a>
           {app ? (
-            <Link href={`/applications/${app.id}`} className={linkBtn}>Application ({app.status})</Link>
+            <Link href={`/applications/${app.id}`} className={linkBtn}>
+              Open Application Kit ({app.status}) →
+            </Link>
           ) : (
             o.tier !== "SKIP" && (
-              <form action={startApplicationAction.bind(null, o.id)}><Submit pendingText="Preparing kit…">Prepare application</Submit></form>
+              <form action={startApplicationAction.bind(null, o.id)}>
+                <Submit
+                  className="bg-[var(--brand)] text-[var(--brand-ink)] hover:opacity-95"
+                  pendingText="Preparing LaTeX kit…"
+                >
+                  Prepare Application Kit
+                </Submit>
+              </form>
             )
           )}
           <form action={setOppStatusAction.bind(null, o.id, o.status === "SKIPPED" ? "NEW" : "SKIPPED")}>
-            <button className={linkBtn}>{o.status === "SKIPPED" ? "Restore" : "Skip"}</button>
+            <button className={linkBtn}>{o.status === "SKIPPED" ? "Restore Role" : "Skip Role"}</button>
           </form>
         </div>
       </div>
-      {sp.dupe && <div className="rounded-lg bg-sky-50 p-3 text-sm text-sky-800">This job already existed — merged into the existing record (no duplicate created).</div>}
+
+      {sp.dupe && (
+        <div className="rounded-md border border-border bg-muted px-4 py-2.5 text-xs text-foreground">
+          This posting was already indexed — merged into the existing record without duplication.
+        </div>
+      )}
 
       {f && (
         <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Fit report</CardTitle>
-                <div className="flex items-center gap-2">
-                  <Pill tone={tone}>{f.verdict}</Pill>
-                  <span className="font-mono text-lg font-semibold">{f.score}/100</span>
-                </div>
+          <div className="rounded-lg border border-border bg-card p-5 lg:col-span-2">
+            <div className="mb-4 flex items-center justify-between border-b border-border pb-3">
+              <div>
+                <div className="eyebrow">Deterministic Evaluation</div>
+                <h2 className="mt-0.5 font-serif text-xl text-foreground">Fit &amp; Mandate Breakdown</h2>
               </div>
-              <p className="text-sm font-medium">{f.action}</p>
-            </CardHeader>
-            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2.5">
+                <Pill tone={tone}>{f.verdict}</Pill>
+                <span className="font-mono text-sm font-medium text-foreground">
+                  {f.action.replace(/^🔥\s*/, "")}
+                </span>
+                <span className="font-serif text-2xl text-[var(--brand)] tnum">{f.score}/100</span>
+              </div>
+            </div>
+
+            <div className="space-y-3">
               {f.hardReasons.length > 0 && (
-                <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-                  <b>Hard constraint failed (not rescued by score):</b>
-                  <ul className="mt-1 list-disc pl-5">{f.hardReasons.map((r) => <li key={r}>{r}</li>)}</ul>
+                <div className="rounded-md border border-[#8c2620]/25 bg-[var(--bad-soft)] p-3 text-xs text-[var(--bad)]">
+                  <div className="font-semibold">Hard constraint failed (never rescued by score):</div>
+                  <ul className="mt-1 list-disc pl-5">
+                    {f.hardReasons.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
-              <Bar label="Technical fit" v={f.breakdown.technical} />
-              <Bar label="Experience fit" v={f.breakdown.experience} />
-              <Bar label="Remote fit" v={f.breakdown.remote} />
-              <Bar label="Location fit" v={f.breakdown.location} />
-              <Bar label="Compensation fit" v={f.breakdown.compensation} />
-              <Bar label="Application friction" v={f.breakdown.friction} />
-              <Bar label="Outreach opportunity" v={f.breakdown.outreach} />
-              {f.signals.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 pt-2">{f.signals.map((s) => <Pill key={s} tone="info">{s}</Pill>)}</div>
-              )}
-            </CardContent>
-          </Card>
+              <Bar label="Technical stack match" v={f.breakdown.technical} />
+              <Bar label="Experience gate" v={f.breakdown.experience} />
+              <Bar label="Remote work policy" v={f.breakdown.remote} />
+              <Bar label="India / Global eligibility" v={f.breakdown.location} />
+              <Bar label="Compensation alignment" v={f.breakdown.compensation} />
+              <Bar label="ATS portal low-friction" v={f.breakdown.friction} />
+              <Bar label="Founder outreach leverage" v={f.breakdown.outreach} />
 
-          <div className="space-y-6">
-            <Card>
-              <CardHeader><CardTitle>Eligibility</CardTitle></CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <div><span className="text-muted-foreground">Remote:</span> {f.remote.cls} — {f.remote.note}</div>
-                <div><span className="text-muted-foreground">India eligible:</span> <b>{f.remote.indiaEligible}</b></div>
-                <div><span className="text-muted-foreground">Experience:</span> {f.experience.note}</div>
-                <div><span className="text-muted-foreground">Salary:</span> {o.salary_text || "—"} ({f.salary.note})</div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle>Skill match</CardTitle></CardHeader>
-              <CardContent className="flex flex-wrap gap-1.5">
-                {f.skills.length === 0 && <span className="text-sm text-muted-foreground">No known skills detected in JD.</span>}
+              {f.signals.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 border-t border-border pt-3">
+                  {f.signals.map((s) => (
+                    <Pill key={s} tone="info">
+                      {s}
+                    </Pill>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <div className="rounded-lg border border-border bg-card p-5">
+              <div className="eyebrow mb-2">Logistics &amp; Compensation</div>
+              <dl className="space-y-2 text-xs">
+                <div className="flex justify-between gap-2 border-b border-border/60 pb-1.5">
+                  <dt className="text-muted-foreground">Remote Policy</dt>
+                  <dd className="text-right font-medium text-foreground">{f.remote.note}</dd>
+                </div>
+                <div className="flex justify-between gap-2 border-b border-border/60 pb-1.5">
+                  <dt className="text-muted-foreground">India Eligible</dt>
+                  <dd className="font-mono uppercase text-foreground">{f.remote.indiaEligible}</dd>
+                </div>
+                <div className="flex justify-between gap-2 border-b border-border/60 pb-1.5">
+                  <dt className="text-muted-foreground">Experience</dt>
+                  <dd className="text-right text-foreground">{f.experience.note}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt className="text-muted-foreground">Compensation</dt>
+                  <dd className="text-right font-mono text-foreground">{f.salary.note}</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="rounded-lg border border-border bg-card p-5">
+              <div className="eyebrow mb-2.5">Detected Stack Overlap</div>
+              <div className="flex flex-wrap gap-1.5">
+                {f.skills.length === 0 && (
+                  <span className="text-xs text-muted-foreground">No specific stack keywords detected in JD.</span>
+                )}
                 {f.skills.map((s) => (
                   <Pill key={s.name} tone={s.level === "strong" ? "good" : s.level === "partial" ? "warn" : "muted"}>
                     {s.name}
                   </Pill>
                 ))}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
-      <Card>
-        <CardHeader><CardTitle>Outreach</CardTitle></CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-2 text-sm">
-            <a className={linkBtn} target="_blank" rel="noreferrer" href={`https://www.linkedin.com/search/results/people/?keywords=${co}%20founder%20OR%20CTO%20OR%20%22engineering%20manager%22`}>Find founder / CTO on LinkedIn ↗</a>
-            <a className={linkBtn} target="_blank" rel="noreferrer" href={`https://www.google.com/search?q=${co}+founder+OR+CTO+email`}>Search web ↗</a>
-            <a className={linkBtn} target="_blank" rel="noreferrer" href={`https://www.google.com/search?q=${co}+careers+remote`}>Careers page ↗</a>
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+          <div>
+            <div className="eyebrow">Direct Founder / CTO Channel</div>
+            <h2 className="mt-0.5 font-serif text-xl text-foreground">Draft Founder Outreach</h2>
           </div>
-          <form action={createOutreachAction.bind(null, o.id)} className="grid gap-3 md:grid-cols-4">
-            <input name="contact_name" placeholder="Contact name" className={fieldCls} />
-            <input name="contact_role" placeholder="Role (CTO, Founder…)" className={fieldCls} />
-            <input name="contact_email" placeholder="Email (if known)" className={fieldCls} />
-            <input name="contact_url" placeholder="LinkedIn URL" className={fieldCls} />
-            <div className="md:col-span-4"><Submit pendingText="Drafting…">Draft outreach email</Submit></div>
-          </form>
-          {outreach.length > 0 && (
-            <p className="text-sm text-muted-foreground">
-              {outreach.length} draft(s) exist — <Link className="underline" href="/outreach">open outreach</Link>.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+          <div className="flex flex-wrap gap-2">
+            <a
+              className={linkBtn}
+              target="_blank"
+              rel="noreferrer"
+              href={`https://www.linkedin.com/search/results/people/?keywords=${co}%20founder%20OR%20CTO%20OR%20%22engineering%20manager%22`}
+            >
+              Find Founder / CTO on LinkedIn ↗
+            </a>
+            <a
+              className={linkBtn}
+              target="_blank"
+              rel="noreferrer"
+              href={`https://www.google.com/search?q=${co}+founder+OR+CTO+email`}
+            >
+              Search Founder Email ↗
+            </a>
+          </div>
+        </div>
+
+        <form action={createOutreachAction.bind(null, o.id)} className="grid gap-3 md:grid-cols-4">
+          <input name="contact_name" placeholder="Contact name (optional)" className={fieldCls} />
+          <input name="contact_role" placeholder="Role (Founder, CTO…)" className={fieldCls} />
+          <input name="contact_email" placeholder="Verified email (if known)" className={fieldCls} />
+          <input name="contact_url" placeholder="LinkedIn URL" className={fieldCls} />
+          <div className="md:col-span-4">
+            <Submit pendingText="Drafting email…">Generate Tailored Cold Email</Submit>
+          </div>
+        </form>
+        {outreach.length > 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {outreach.length} outreach draft(s) already created for this role —{" "}
+            <Link className="font-medium text-foreground underline" href="/outreach">
+              open Founder Outreach
+            </Link>
+            .
+          </p>
+        )}
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>Job description</CardTitle></CardHeader>
-          <CardContent>
-            <pre className="max-h-[480px] overflow-auto whitespace-pre-wrap font-sans text-sm leading-relaxed">{o.description || "No description captured."}</pre>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Notes</CardTitle></CardHeader>
-          <CardContent>
-            <form action={saveOppNotesAction.bind(null, o.id)} className="space-y-2">
-              <textarea name="notes" defaultValue={o.notes ?? ""} rows={8} className={fieldCls} />
-              <Submit>Save notes</Submit>
-            </form>
-          </CardContent>
-        </Card>
+        <div className="rounded-lg border border-border bg-card p-5 lg:col-span-2">
+          <div className="eyebrow mb-3">Original Specification</div>
+          <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-foreground/90">
+            {o.description || "No description captured."}
+          </pre>
+        </div>
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="eyebrow mb-3">Research Notes</div>
+          <form action={saveOppNotesAction.bind(null, o.id)} className="space-y-3">
+            <textarea
+              name="notes"
+              defaultValue={o.notes ?? ""}
+              rows={9}
+              placeholder="Founder background, product links, demo ideas…"
+              className={fieldCls}
+            />
+            <Submit>Save Notes</Submit>
+          </form>
+        </div>
       </div>
     </div>
   );
 }
-

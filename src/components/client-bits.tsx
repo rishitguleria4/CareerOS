@@ -15,10 +15,10 @@ export function CopyButton({ text, label }: { text: string; label?: string }) {
         setDone(true);
         setTimeout(() => setDone(false), 1500);
       }}
-      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-muted"
-      title="Copy"
+      className="inline-flex h-7 items-center gap-1.5 rounded border border-border bg-card px-2 font-mono text-[11px] text-foreground transition-colors hover:bg-muted"
+      title="Copy to clipboard"
     >
-      {done ? <Check className="size-3" /> : <Copy className="size-3" />}
+      {done ? <Check className="size-3 text-[var(--brand)]" /> : <Copy className="size-3 text-muted-foreground" />}
       {label ?? (done ? "Copied" : "Copy")}
     </button>
   );
@@ -39,7 +39,7 @@ export function Submit({
       type="submit"
       disabled={pending}
       className={cn(
-        "inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60",
+        "inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground shadow-[0_1px_1px_rgba(20,20,19,0.08)] transition-opacity hover:opacity-90 disabled:opacity-60",
         className
       )}
     >
@@ -47,4 +47,3 @@ export function Submit({
     </button>
   );
 }
-

@@ -21,6 +21,7 @@ import { generateResumePdf } from "@/lib/pdf";
 import { DEFAULT_PROFILE, getProfile, saveProfile } from "@/lib/profile";
 import { pickVariant, renderResume, VARIANTS, type TailorPlan, type VariantKey } from "@/lib/resume";
 import { extractSkills } from "@/lib/skills";
+import { automationSettings, BEST_FIT_ORDER, clampApps, clampOutreach, qualifyingWhere } from "@/lib/automation";
 import type { FormFieldItem, Opportunity, Profile } from "@/lib/types";
 
 const DAY = 86400000;
@@ -129,9 +130,17 @@ export async function prepareOutreachDraft(oppId: number, profile?: Profile): Pr
   return row!.id;
 }
 
-/** Batch auto-prepares Application Kits + Outreach Drafts for top S/A matches so they wait in the Approval Queue. */
-export async function autoPrepareQueue(limit = 6): Promise<{ appsPrepared: number; outreachPrepared: number }> {
+/**
+ * Prepares application kits and outreach drafts for the best-fitting roles so they wait for approval.
+ * How many, and how strict the match must be, come from the user's automation settings (Profile → Automation).
+ */
+export async function autoPrepareQueue(
+  override?: { apps?: number; outreach?: number }
+): Promise<{ appsPrepared: number; outreachPrepared: number; quality: string }> {
   const profile = await getProfile();
+  const settings = automationSettings(profile);
+  const appsTarget = override?.apps ?? settings.appsPerRun;
+  const outreachTarget = override?.outreach ?? settings.outreachPerRun;
 
   // Remove any unsubmitted kits tied to opportunities that were rejected/skipped or built with an empty profile
   await query(
@@ -143,69 +152,103 @@ export async function autoPrepareQueue(limit = 6): Promise<{ appsPrepared: numbe
      AND (contact_email LIKE 'founders@%' OR opportunity_id IN (SELECT id FROM opportunities WHERE status = 'SKIPPED' OR tier = 'SKIP'))`
   );
 
-  // Do not generate placeholder "Your Name" kits if the user hasn't filled in their profile yet
-  if (!profile.name && profile.skills.length === 0) {
-    await query("DELETE FROM applications WHERE status IN ('READY', 'DRAFT')");
-    return { appsPrepared: 0, outreachPrepared: 0 };
-  }
-
   // Upgrade any existing READY/DRAFT applications that were rendered before the LaTeX engine upgrade
   const legacyApps = await query<{ id: number; opportunity_id: number; resume_variant: string | null }>(
     `SELECT id, opportunity_id, resume_variant FROM applications
      WHERE status IN ('READY', 'DRAFT') AND (tailored_resume IS NULL OR tailored_resume NOT LIKE '%\\\\documentclass%')`
   );
-  for (const la of legacyApps) {
-    const opp = await getOpp(la.opportunity_id);
-    const variant = ((la.resume_variant as VariantKey) || pickVariant(opp));
-    const kit = await buildKit(profile, opp, variant in VARIANTS ? variant : "backend-ai");
-    await query(
-      "UPDATE applications SET tailored_resume=$2, cover_note=$3, form_fields=$4::jsonb WHERE id=$1",
-      [la.id, kit.resume, kit.cover, JSON.stringify(kit.formFields)]
+  await Promise.all(
+    legacyApps.map(async (la) => {
+      const opp = await getOpp(la.opportunity_id);
+      const variant = (la.resume_variant as VariantKey) || pickVariant(opp);
+      const kit = await buildKit(profile, opp, variant in VARIANTS ? variant : "backend-ai");
+      await query(
+        "UPDATE applications SET tailored_resume=$2, cover_note=$3, form_fields=$4::jsonb WHERE id=$1",
+        [la.id, kit.resume, kit.cover, JSON.stringify(kit.formFields)]
+      );
+    })
+  );
+
+  const where = qualifyingWhere(settings.preset);
+
+  // Applications: best-fit first (tier → confirmed India eligibility → fit score), only roles that pass the preset
+  let appsPrepared = 0;
+  if (appsTarget > 0) {
+    const topOpps = await query<Opportunity>(
+      `SELECT o.* FROM opportunities o
+       LEFT JOIN applications a ON a.opportunity_id = o.id
+       WHERE o.status = 'NEW' AND a.id IS NULL AND ${where}
+       ORDER BY ${BEST_FIT_ORDER} LIMIT $1`,
+      [appsTarget]
     );
+    await Promise.all(topOpps.map((opp) => prepareOpportunityKit(opp.id, profile)));
+    appsPrepared = topOpps.length;
   }
 
-  const topOpps = await query<Opportunity>(
-    `SELECT o.* FROM opportunities o
-     LEFT JOIN applications a ON a.opportunity_id = o.id
-     WHERE o.status = 'NEW' AND o.tier IN ('S', 'A', 'B') AND a.id IS NULL
-     ORDER BY o.score DESC NULLS LAST LIMIT $1`,
-    [limit]
-  );
-  let appsPrepared = legacyApps.length;
+  // Outreach: one draft per company, founder-led / outreach-first roles first, then the same best-fit order
   let outreachPrepared = 0;
-  for (let i = 0; i < topOpps.length; i++) {
-    const opp = topOpps[i];
-    await prepareOpportunityKit(opp.id, profile);
-    appsPrepared++;
-    if (i < 3 || opp.tier === "S" || opp.fit?.action?.includes("OUTREACH")) {
-      await prepareOutreachDraft(opp.id, profile);
-      outreachPrepared++;
+  if (outreachTarget > 0) {
+    const outreachOpps = await query<Opportunity>(
+      `SELECT o.* FROM opportunities o
+       WHERE o.status IN ('NEW','APPLYING') AND ${where}
+         AND NOT EXISTS (
+           SELECT 1 FROM outreach r
+           WHERE r.opportunity_id = o.id OR LOWER(r.company_name) = LOWER(o.company_name)
+         )
+       ORDER BY (CASE WHEN o.fit->>'action' LIKE '%OUTREACH%' THEN 0 ELSE 1 END), ${BEST_FIT_ORDER}
+       LIMIT $1`,
+      [outreachTarget * 3]
+    );
+    const seen = new Set<string>();
+    const chosen: Opportunity[] = [];
+    for (const opp of outreachOpps) {
+      if (chosen.length >= outreachTarget) break;
+      const key = opp.company_name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      chosen.push(opp);
     }
+    await Promise.all(chosen.map((opp) => prepareOutreachDraft(opp.id, profile)));
+    outreachPrepared = chosen.length;
   }
-  const outreachFirstOpps = await query<Opportunity>(
-    `SELECT o.* FROM opportunities o
-     LEFT JOIN outreach r ON r.opportunity_id = o.id
-     WHERE o.status = 'NEW' AND o.fit->>'action' = 'OUTREACH FIRST' AND r.id IS NULL
-     ORDER BY o.score DESC NULLS LAST LIMIT 4`
+
+  await logEvent(
+    "automation",
+    null,
+    `Prepared ${appsPrepared} application(s) and ${outreachPrepared} outreach draft(s) · ${settings.preset.label}`
   );
-  for (const opp of outreachFirstOpps) {
-    await prepareOutreachDraft(opp.id, profile);
-    outreachPrepared++;
-  }
-  return { appsPrepared, outreachPrepared };
+  return { appsPrepared: appsPrepared + legacyApps.length, outreachPrepared, quality: settings.quality };
 }
 
 // ---------------- discovery ----------------
 export async function runDiscoveryAction() {
   const r = await runDiscovery();
-  await autoPrepareQueue(6);
+  const prep = await autoPrepareQueue();
   revalidatePath("/", "layout");
-  redirect(`/dashboard?discovered=${r.inserted}&dupes=${r.duplicates}`);
+  redirect(
+    `/dashboard?discovered=${r.inserted}&dupes=${r.duplicates}&apps=${prep.appsPrepared}&emails=${prep.outreachPrepared}`
+  );
 }
 
 export async function autoPrepareBatchAction() {
-  await autoPrepareQueue(8);
+  const prep = await autoPrepareQueue();
   revalidatePath("/", "layout");
+  redirect(`/dashboard?apps=${prep.appsPrepared}&emails=${prep.outreachPrepared}`);
+}
+
+/** Saves only the automation preferences (fast — no re-scoring). */
+export async function saveAutomationAction(formData: FormData) {
+  const prev = await getProfile();
+  const quality = s(formData, "matchQuality");
+  await saveProfile({
+    ...prev,
+    prepAppsPerRun: clampApps(Number(s(formData, "prepAppsPerRun"))),
+    prepOutreachPerRun: clampOutreach(Number(s(formData, "prepOutreachPerRun"))),
+    matchQuality: quality === "strong" || quality === "broad" ? quality : "best",
+  });
+  revalidatePath("/", "layout");
+  const back = s(formData, "back");
+  redirect(back === "dashboard" ? "/dashboard?settings=1" : "/profile?automation=1");
 }
 
 export async function rescoreAction() {
@@ -565,6 +608,20 @@ export async function saveProfileAction(formData: FormData) {
     workAuth: s(formData, "workAuth"),
     yearsExperience: Number(s(formData, "yearsExperience")) || 0,
     minSalaryUsdMonthly: Number(s(formData, "minSalaryUsdMonthly")) || DEFAULT_PROFILE.minSalaryUsdMonthly,
+    targetSalaryUsdMonthly: Number(s(formData, "targetSalaryUsdMonthly")) || prev.targetSalaryUsdMonthly || 3000,
+    idealSalaryUsdMonthly: Number(s(formData, "idealSalaryUsdMonthly")) || prev.idealSalaryUsdMonthly || 3500,
+    upsideSalaryUsdMonthly: Number(s(formData, "upsideSalaryUsdMonthly")) || prev.upsideSalaryUsdMonthly || 5000,
+    prepAppsPerRun: formData.has("prepAppsPerRun")
+      ? clampApps(Number(s(formData, "prepAppsPerRun")))
+      : prev.prepAppsPerRun,
+    prepOutreachPerRun: formData.has("prepOutreachPerRun")
+      ? clampOutreach(Number(s(formData, "prepOutreachPerRun")))
+      : prev.prepOutreachPerRun,
+    matchQuality: formData.has("matchQuality")
+      ? (["best", "strong", "broad"].includes(s(formData, "matchQuality"))
+          ? (s(formData, "matchQuality") as Profile["matchQuality"])
+          : prev.matchQuality)
+      : prev.matchQuality,
     answers: String(formData.get("answers") ?? "")
       .split("\n")
       .map((l) => l.split("=>").map((x) => x.trim()))
@@ -577,6 +634,8 @@ export async function saveProfileAction(formData: FormData) {
   };
   await saveProfile(p);
   await rescoreAll();
+  await query("UPDATE applications SET tailored_resume = NULL WHERE status IN ('READY', 'DRAFT')");
+  await autoPrepareQueue();
   revalidatePath("/", "layout");
   redirect("/profile?saved=1");
 }
@@ -642,6 +701,8 @@ export async function uploadResumeAction(formData: FormData) {
   };
   await saveProfile(merged);
   await rescoreAll();
+  await query("UPDATE applications SET tailored_resume = NULL WHERE status IN ('READY', 'DRAFT')");
+  await autoPrepareQueue();
   revalidatePath("/", "layout");
   redirect(`/profile?imported=${mode}`);
 }

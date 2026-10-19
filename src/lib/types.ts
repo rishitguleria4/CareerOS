@@ -37,6 +37,9 @@ export interface Profile {
   workAuth: string;
   yearsExperience: number;
   minSalaryUsdMonthly: number;
+  targetSalaryUsdMonthly?: number;
+  idealSalaryUsdMonthly?: number;
+  upsideSalaryUsdMonthly?: number;
   answers: { q: string; a: string }[];
   resumeText: string;
   // Direct 1-tap Email / SMTP settings (optional in UI or env)
@@ -44,6 +47,10 @@ export interface Profile {
   smtpPort?: number;
   smtpUser?: string;
   smtpPass?: string;
+  // Automation preferences: how much to prepare per run, and how strict the match must be
+  prepAppsPerRun?: number;
+  prepOutreachPerRun?: number;
+  matchQuality?: "best" | "strong" | "broad";
 }
 
 export interface FormFieldItem {

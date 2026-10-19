@@ -15,14 +15,12 @@ export function isRelevantTitle(title: string): boolean {
 }
 
 // ---------- remote / location ----------
-const US_ONLY =
-  /(\bus\b|u\.s\.|usa|united states)[- ]?(only|based|residents?|citizens?)|(must|need to|required to) (be )?(reside|located|based|live)[^.\n]{0,40}(us\b|u\.s\.|united states|usa)|(authori[sz]ed|eligible|legally entitled) to work (in|within) the (us|u\.s\.|united states)|work authori[sz]ation[^.\n]{0,40}(us|united states)|us citizens?|security clearance|remote[^.\n]{0,15}\((us|usa|united states)\)|remote[- ]?(us|usa)\b|us[- ]remote/i;
-const OTHER_REGION =
-  /(europe|\beu\b|emea|\buk\b|united kingdom|canada|latam|latin america|australia|germany|france|brazil|mexico)[- ]?(only|based|residents?)|(must|need to) (be )?(located|based|reside)[^.\n]{0,40}(europe|\beu\b|\buk\b|canada|germany|australia|emea)|(remote|remote in)[ -]?\(?(europe|eu|uk|emea|canada|germany|latam)\)?(?!.*(india|worldwide|anywhere))/i;
+const STRICT_LOCK =
+  /\b(us citizens? only|u\.s\. citizens? only|security clearance|w-?2 only|no (international )?contractors|no c2c|(must|need to|required to) (currently )?(reside|live|be physically located) in the (us\b|u\.s\.|united states|uk\b|united kingdom|canada)|(authori[sz]ed|legally entitled) to work in the (us|u\.s\.|united states) without (visa )?sponsorship|remote\s*[-–(]\s*(us|u\.s\.|usa|uk|canada)\s+only\b|\bus[- ]only\b)/i;
 const WORLDWIDE =
-  /worldwide|anywhere( in the world)?|global(ly)? remote|work from anywhere|remote[- ]?(global|first)|any ?time ?zone|international candidates|all countries|globally distributed|distributed team/i;
+  /worldwide|anywhere( in the world)?|global(ly)? remote|work from anywhere|remote[- ]?(global|first)|any ?time ?zone|international (candidates|contractors)|all countries|globally distributed|distributed team|\b(deel|rippling|b2b contract|independent contractor)\b/i;
 const INDIA = /\bindia\b|bangalore|bengaluru|hyderabad|mumbai|pune|delhi|gurgaon|gurugram|noida|chennai|kolkata|\bist\b|apac|asia/i;
-const REMOTE_WORD = /\bremote\b|work from home|wfh|fully distributed/i;
+const REMOTE_WORD = /\bremote\b|work from home|wfh|fully distributed|telecommut/i;
 const HYBRID_ONSITE = /\bhybrid\b|on-?site|in[- ]office|in the office|relocat/i;
 
 const NON_INDIA_LOC =
@@ -38,58 +36,45 @@ export function analyzeRemote(job: RawJob) {
   const remote =
     job.remoteFlag === true ||
     REMOTE_WORD.test(titleAndLoc) ||
-    /\b(fully remote|100% remote|remote[- ]first|work from anywhere|remote role|remote position)\b/i.test(head);
+    /\b(fully remote|100% remote|remote[- ]first|work from anywhere|remote role|remote position|remote team)\b/i.test(head);
   const locHasNonIndia = NON_INDIA_LOC.test(loc) && !INDIA.test(loc) && !/\b(worldwide|anywhere|global)\b/i.test(loc);
-  const usOnly = US_ONLY.test(head);
-  const otherRegion = OTHER_REGION.test(head);
-  const onsite = !remote && (HYBRID_ONSITE.test(head) || (loc !== "" && !/remote/i.test(loc)));
+  const strictLock = STRICT_LOCK.test(head);
+  const onsiteOnly = !remote && (HYBRID_ONSITE.test(head) || locHasNonIndia || (loc !== "" && !/remote/i.test(loc)));
 
   let cls: RemoteClass = "unknown";
   let eligible: "yes" | "likely" | "unknown" | "no" = "unknown";
   let note = "";
 
-  if (locHasNonIndia) {
-    if (remote) {
-      cls = "restricted";
-      eligible = "no";
-      note = `Remote restricted to non-India region (${loc})`;
-    } else {
-      cls = "onsite";
-      eligible = "no";
-      note = `On-site/hybrid outside India (${loc})`;
-    }
-  } else if (usOnly && !worldwide && !mentionsIndia) {
+  if (onsiteOnly && !mentionsIndia) {
+    cls = "onsite";
+    eligible = "no";
+    note = `On-site/hybrid outside India (${loc || "unspecified location"})`;
+  } else if (strictLock && !worldwide && !mentionsIndia) {
     cls = "restricted";
     eligible = "no";
-    note = "US-only / US work authorization required";
-  } else if (otherRegion && !worldwide && !mentionsIndia) {
-    cls = "restricted";
-    eligible = "no";
-    note = "Restricted to a region that excludes India";
+    note = "Strict US/local work authorization or citizenship lock";
   } else if (remote && mentionsIndia) {
     cls = "india";
     eligible = "yes";
-    note = "Remote and India/APAC mentioned";
+    note = "Remote · India / APAC explicitly included";
   } else if (remote && worldwide) {
     cls = "worldwide";
-    eligible = "likely";
-    note = "Worldwide / location-agnostic remote";
+    eligible = "yes";
+    note = "Global / location-agnostic remote";
   } else if (remote) {
     cls = "remote";
-    eligible = "unknown";
-    note = "Remote, but eligibility for India is not stated";
+    eligible = "likely";
+    note = locHasNonIndia
+      ? `US/EU remote (${loc}) · open to remote overlap`
+      : "Remote · US/EU startup (contractor-friendly)";
   } else if (mentionsIndia) {
     cls = "onsite";
     eligible = "likely";
-    note = `On-site/hybrid in India (${loc || "see JD"})`;
-  } else if (onsite) {
-    cls = "onsite";
-    eligible = "no";
-    note = `On-site/hybrid: ${loc || "unspecified location"}`;
+    note = `India (${loc || "see JD"})`;
   } else {
     note = "Location unclear";
   }
-  if (usOnly && (worldwide || mentionsIndia)) reasons.push("Mentions US authorization but also worldwide/India");
+  if (strictLock && (worldwide || mentionsIndia)) reasons.push("Mentions work auth alongside worldwide/India");
   return { cls, eligible, note, mixed: reasons.length > 0 };
 }
 
@@ -196,26 +181,72 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
     technical = Math.min(100, Math.round(technical * 1.15 + 8));
   } else if (jdSkills.length === 0) technical = 55;
 
-  const roleHit = profile.targetRoles.some((r) => new RegExp(r.split(/\s+/).join(".*"), "i").test(job.title));
-  if (roleHit) technical = Math.min(100, technical + 8);
+  const escapeRole = (r: string) =>
+    r
+      .replace(/[+]/g, " ")
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .trim()
+      .split(/\s+/)
+      .join(".*");
+  const primaryRolePattern =
+    /\b(founding engineer|early[- ]stage engineer|early engineer|first engineer|0[- ]?to[- ]?1|ai product engineer|ai full[- ]?stack|full[- ]?stack ai|backend\s*(\+|and|&)?\s*ai|ai\s*(\+|and|&)?\s*backend|product engineer)\b/i;
+  const roleHit =
+    primaryRolePattern.test(job.title) ||
+    profile.targetRoles.some((r) => new RegExp(escapeRole(r), "i").test(job.title));
+  if (roleHit) technical = Math.min(100, technical + 10);
 
   // ---- component scores ----
   const experience =
     exp.kind === "none" ? 100 : exp.kind === "preferred" ? 85 : (exp.years ?? 0) <= 1 ? 90 : (exp.years ?? 0) === 2 ? 60 : 10;
   const remoteScore =
-    remote.cls === "india" ? 100 : remote.cls === "worldwide" ? 100 : remote.cls === "remote" ? 70 : remote.cls === "onsite" ? (remote.eligible === "likely" ? 45 : 0) : remote.cls === "restricted" ? 0 : 40;
-  const location = remote.eligible === "yes" ? 100 : remote.eligible === "likely" ? 90 : remote.eligible === "unknown" ? 55 : 0;
+    remote.cls === "india" ? 100 : remote.cls === "worldwide" ? 100 : remote.cls === "remote" ? 88 : remote.cls === "onsite" ? (remote.eligible === "likely" ? 45 : 0) : remote.cls === "restricted" ? 0 : 40;
+  const location = remote.eligible === "yes" ? 100 : remote.eligible === "likely" ? 92 : remote.eligible === "unknown" ? 60 : 0;
 
-  let compensation = 70;
-  if (sal.monthlyUsd !== null) {
-    const floor = profile.minSalaryUsdMonthly || 2500;
-    compensation = sal.monthlyUsd >= floor ? 100 : Math.max(10, Math.round((sal.monthlyUsd / floor) * 100));
-  }
   const src = job.source.toLowerCase();
-  const friction = /greenhouse|lever|ashby/.test(src) ? 95 : /yc|workatastartup/.test(src) ? 85 : /email/.test(src) ? 80 : 65;
+  const startup = STARTUP.test(text) || /yc|hn|workatastartup|ashby|workable|arbeitnow/.test(src);
+  const broadOwnership = /(own|end[- ]to[- ]end|wear many hats|ship|full[- ]stack|0 ?(to|→) ?1|product[- ]minded)/i.test(text);
 
-  const startup = STARTUP.test(text) || /yc|workatastartup/.test(src);
-  const broadOwnership = /(own|end[- ]to[- ]end|wear many hats|ship|full[- ]stack|0 ?to ?1)/i.test(text);
+  // ---- 4-tier compensation hierarchy ----
+  const minFloor = profile.minSalaryUsdMonthly || 2500;
+  const targetFloor = profile.targetSalaryUsdMonthly || 3000;
+  const idealFloor = profile.idealSalaryUsdMonthly || 3500;
+  const upsideFloor = profile.upsideSalaryUsdMonthly || 5000;
+  const credibleFit = technical >= 65 && (startup || roleHit || exp.kind !== "required");
+
+  let compensation = startup ? 82 : 72;
+  let salaryNote = startup ? "Not stated (US/EU startup · target $3k–$3.5k/mo)" : "Not stated";
+
+  if (sal.monthlyUsd !== null) {
+    const m = Math.round(sal.monthlyUsd);
+    const fmt = `≈ $${m.toLocaleString()}/mo`;
+    if (m >= upsideFloor) {
+      if (credibleFit) {
+        compensation = 100;
+        salaryNote = `${fmt} · Upside ($5k+/mo, credible fit)`;
+        signals.push("Upside comp ($5k+/mo) with credible fit");
+      } else {
+        compensation = 70;
+        salaryNote = `${fmt} · Upside ($5k+/mo, stretch fit)`;
+      }
+    } else if (m >= idealFloor) {
+      compensation = 100;
+      salaryNote = `${fmt} · Ideal ($3.5k+/mo)`;
+      signals.push("Meets Ideal comp ($3.5k+/mo)");
+    } else if (m >= targetFloor) {
+      compensation = 92;
+      salaryNote = `${fmt} · Target ($3k+/mo)`;
+      signals.push("Meets Target comp ($3k+/mo)");
+    } else if (m >= minFloor) {
+      compensation = 78;
+      salaryNote = `${fmt} · Minimum acceptable ($2.5k+/mo)`;
+    } else {
+      compensation = Math.max(15, Math.round((m / minFloor) * 55));
+      salaryNote = `${fmt} · Below $2.5k/mo minimum`;
+    }
+  }
+
+  const friction = /greenhouse|lever|ashby|workable|yc|hn/.test(src) ? 95 : /himalayas|arbeitnow|remotive|remoteok/.test(src) ? 85 : 70;
+
   let outreach = 40;
   if (startup) outreach += 35;
   if (broadOwnership) outreach += 10;
@@ -223,16 +254,17 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
   if (juniorTitle) outreach += 5;
   outreach = Math.min(100, outreach);
 
-  if (startup) signals.push("Startup / founder-led signals");
-  if (juniorTitle) signals.push("Junior/entry-level title");
-  if (exp.kind === "none") signals.push("No experience stated");
-  if (roleHit) signals.push("Title matches a target role");
+  if (startup) signals.push("Early-stage / startup signals");
+  if (broadOwnership) signals.push("0→1 end-to-end ownership");
+  if (juniorTitle) signals.push("Early-career / junior title");
+  if (exp.kind === "none") signals.push("No years-of-experience gate");
+  if (roleHit) signals.push("Matches primary target role");
   if (remote.mixed) signals.push("US auth mentioned alongside worldwide/India — verify");
 
   const blended =
     technical * 0.35 + experience * 0.15 + remoteScore * 0.2 + compensation * 0.1 + friction * 0.05 + outreach * 0.15;
   let score = Math.round(blended);
-  if (juniorTitle) score = Math.min(100, score + 3);
+  if (juniorTitle || primaryRolePattern.test(job.title)) score = Math.min(100, score + 3);
 
   // ---- verdict / tier ----
   let verdict: Verdict;
@@ -251,7 +283,7 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
     verdict = tier === "S" || (tier === "A" && !uncertain) ? "PASS" : "MAYBE";
     const weakTitle = !roleHit && !juniorTitle;
     const outreachFirst = startup && (weakTitle || exp.kind === "required") && technical >= 55;
-    if (tier === "S") action = "🔥 APPLY + OUTREACH";
+    if (tier === "S") action = "APPLY + OUTREACH";
     else if (outreachFirst) action = "OUTREACH FIRST";
     else if (tier === "A") action = "APPLY";
     else if (tier === "B") action = "REVIEW";
@@ -271,7 +303,7 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
       min: sal.min,
       max: sal.max,
       currency: sal.currency,
-      note: sal.monthlyUsd !== null ? `≈ $${Math.round(sal.monthlyUsd).toLocaleString()}/mo` : "Not stated",
+      note: salaryNote,
     },
     breakdown: { technical, experience, remote: remoteScore, location, compensation, friction, outreach },
     signals,
