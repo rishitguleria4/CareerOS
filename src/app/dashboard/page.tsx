@@ -14,7 +14,7 @@ import {
 import { Empty, OppRow, PageHeader, Pill, TierBadge, fieldCls, ghostBtn, linkBtn, linkBtnBrand } from "@/components/bits";
 import { Submit } from "@/components/client-bits";
 import { automationSettings, BEST_FIT_ORDER, MATCH_PRESETS, qualifyingWhere } from "@/lib/automation";
-import { query, queryOne } from "@/lib/db";
+import { isEphemeralVercelDb, query, queryOne } from "@/lib/db";
 import { hasGemini } from "@/lib/gemini";
 import { hasDirectEmailConfig } from "@/lib/mailer";
 import { getProfile } from "@/lib/profile";
@@ -157,6 +157,17 @@ export default async function Dashboard({
           <Link href="/dashboard" className="font-mono text-[11px] underline">
             Dismiss
           </Link>
+        </div>
+      )}
+
+      {isEphemeralVercelDb() && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#8c2620]/25 bg-[var(--bad-soft)] px-4 py-3 text-xs text-[var(--bad)]">
+          <div>
+            <span className="font-semibold">Temporary storage mode (/tmp):</span> Your Vercel deployment is live, but{" "}
+            <code className="font-mono">DATABASE_URL</code> is not connected yet. Open your Vercel project →{" "}
+            <b>Storage → Create Database (Neon Postgres) → Connect to Project</b>, then click <b>Redeploy</b> in the
+            Deployments tab so your jobs and profile persist permanently.
+          </div>
         </div>
       )}
 

@@ -12,6 +12,20 @@ const g = globalThis as unknown as {
   __cos_pglite_mutex?: Promise<any>;
 };
 
+export function getPostgresUrl(): string | undefined {
+  return (
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL_NON_POOLING
+  );
+}
+
+export function isEphemeralVercelDb(): boolean {
+  return Boolean(process.env.VERCEL && !getPostgresUrl());
+}
+
 async function initPGlite(dir: string) {
   const { PGlite } = await import("@electric-sql/pglite");
   fs.mkdirSync(dir, { recursive: true });
@@ -31,23 +45,24 @@ async function initPGlite(dir: string) {
 
 async function createDriver(): Promise<Driver> {
   let driver: Driver;
-  if (process.env.DATABASE_URL) {
+  const pgUrl = getPostgresUrl();
+  if (pgUrl) {
     const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+    const pool = new Pool({
+      connectionString: pgUrl,
+      max: 5,
+      ssl: pgUrl.includes("localhost") || pgUrl.includes("127.0.0.1") ? undefined : { rejectUnauthorized: false },
+    });
     driver = { query: async (sql, params) => (await pool.query(sql, params)).rows };
   } else {
-    if (process.env.VERCEL) {
-      throw new Error(
-        "DATABASE_URL is not set. On Vercel, add a Postgres database (Neon via Vercel Storage) and redeploy."
-      );
-    }
-    const dir = path.join(process.cwd(), ".data", "pglite");
+    // On Vercel without DATABASE_URL/POSTGRES_URL yet, use writable /tmp so the app never 500s before Storage is attached
+    const baseDir = process.env.VERCEL ? "/tmp" : path.join(process.cwd(), ".data");
+    const dir = path.join(baseDir, "pglite");
     let db;
     try {
       db = await initPGlite(dir);
     } catch {
-      // If two processes touched .data/pglite simultaneously and corrupted WASM WAL, recover cleanly
-      const backupDir = path.join(process.cwd(), ".data", `pglite.corrupt-${Date.now()}`);
+      const backupDir = path.join(baseDir, `pglite.corrupt-${Date.now()}`);
       try {
         fs.renameSync(dir, backupDir);
       } catch {
