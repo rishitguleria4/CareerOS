@@ -25,35 +25,44 @@ async function getText(url: string, timeoutMs = 12000): Promise<string> {
 export async function fetchGreenhouse(slug: string): Promise<RawJob[]> {
   const d = await getJson(`https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`);
   const company = slugToName(slug);
-  return (d.jobs ?? []).map((j: any) => ({
-    company,
-    title: j.title,
-    url: j.absolute_url,
-    source: `greenhouse:${slug}`,
-    location: j.location?.name,
-    description: stripHtml(j.content ?? ""),
-    postedAt: j.updated_at,
-    remoteFlag: /remote|anywhere|distributed|global|home/i.test(j.location?.name ?? "") ? true : undefined,
-  }));
+  return (d.jobs ?? []).map((j: any) => {
+    const loc: string = j.location?.name ?? "";
+    return {
+      company,
+      title: j.title,
+      url: j.absolute_url,
+      source: `greenhouse:${slug}`,
+      location: loc,
+      description: stripHtml(j.content ?? ""),
+      postedAt: j.updated_at,
+      remoteFlag: /\b(remote|anywhere|worldwide|global|wfh|work from home)\b/i.test(`${loc} ${j.title}`) ? true : undefined,
+    };
+  });
 }
 
 export async function fetchLever(slug: string): Promise<RawJob[]> {
   const d = await getJson(`https://api.lever.co/v0/postings/${slug}?mode=json`);
   const company = slugToName(slug);
-  return (Array.isArray(d) ? d : []).map((j: any) => ({
-    company,
-    title: j.text,
-    url: j.hostedUrl,
-    source: `lever:${slug}`,
-    location: [j.categories?.location, j.workplaceType].filter(Boolean).join(" · "),
-    description: [j.descriptionPlain, ...(j.lists ?? []).map((l: any) => `${l.text}\n${stripHtml(l.content ?? "")}`)]
-      .filter(Boolean)
-      .join("\n"),
-    salaryText: j.salaryRange ? `${j.salaryRange.currency ?? "$"}${j.salaryRange.min}-${j.salaryRange.max}` : undefined,
-    postedAt: j.createdAt ? new Date(j.createdAt).toISOString() : undefined,
-    remoteFlag:
-      j.workplaceType === "remote" || /remote|anywhere|global/i.test(j.categories?.location ?? "") ? true : undefined,
-  }));
+  return (Array.isArray(d) ? d : []).map((j: any) => {
+    const wp = j.workplaceType ? String(j.workplaceType) : "";
+    const loc = [j.categories?.location, wp].filter(Boolean).join(" · ");
+    return {
+      company,
+      title: j.text,
+      url: j.hostedUrl,
+      source: `lever:${slug}`,
+      location: loc,
+      description: [j.descriptionPlain, ...(j.lists ?? []).map((l: any) => `${l.text}\n${stripHtml(l.content ?? "")}`)]
+        .filter(Boolean)
+        .join("\n"),
+      salaryText: j.salaryRange ? `${j.salaryRange.currency ?? "$"}${j.salaryRange.min}-${j.salaryRange.max}` : undefined,
+      postedAt: j.createdAt ? new Date(j.createdAt).toISOString() : undefined,
+      remoteFlag:
+        wp.toLowerCase() === "remote" || /\b(remote|anywhere|worldwide|global)\b/i.test(`${loc} ${j.text}`)
+          ? true
+          : undefined,
+    };
+  });
 }
 
 export async function fetchAshby(slug: string): Promise<RawJob[]> {
@@ -62,7 +71,11 @@ export async function fetchAshby(slug: string): Promise<RawJob[]> {
   return (d.jobs ?? [])
     .filter((j: any) => j.isListed !== false)
     .map((j: any) => {
-      const loc = [j.location, ...(j.secondaryLocations ?? []).map((s: any) => s.location)].filter(Boolean).join(" · ");
+      const baseLoc = [j.location, ...(j.secondaryLocations ?? []).map((s: any) => s.location)]
+        .filter(Boolean)
+        .join(" · ");
+      const wp = j.workplaceType || (j.isRemote === true ? "Remote" : "");
+      const loc = wp && !new RegExp(wp, "i").test(baseLoc) ? [baseLoc, wp].filter(Boolean).join(" · ") : baseLoc;
       return {
         company,
         title: j.title,
@@ -73,7 +86,11 @@ export async function fetchAshby(slug: string): Promise<RawJob[]> {
         salaryText: j.compensation?.compensationTierSummary,
         postedAt: j.publishedAt,
         remoteFlag:
-          j.isRemote === true || j.workplaceType === "Remote" || /remote|anywhere|global/i.test(loc) ? true : undefined,
+          j.isRemote === true ||
+          j.workplaceType === "Remote" ||
+          /\b(remote|anywhere|worldwide|global)\b/i.test(`${loc} ${j.title}`)
+            ? true
+            : undefined,
       };
     });
 }

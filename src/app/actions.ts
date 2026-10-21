@@ -21,7 +21,14 @@ import { generateResumePdf } from "@/lib/pdf";
 import { DEFAULT_PROFILE, getProfile, saveProfile } from "@/lib/profile";
 import { pickVariant, renderResume, VARIANTS, type TailorPlan, type VariantKey } from "@/lib/resume";
 import { extractSkills } from "@/lib/skills";
-import { automationSettings, BEST_FIT_ORDER, clampApps, clampOutreach, qualifyingWhere } from "@/lib/automation";
+import {
+  automationSettings,
+  BEST_FIT_ORDER,
+  clampApps,
+  clampOutreach,
+  outreachQualifyingWhere,
+  qualifyingWhere,
+} from "@/lib/automation";
 import type { FormFieldItem, Opportunity, Profile } from "@/lib/types";
 
 const DAY = 86400000;
@@ -142,10 +149,21 @@ export async function autoPrepareQueue(
   const appsTarget = override?.apps ?? settings.appsPerRun;
   const outreachTarget = override?.outreach ?? settings.outreachPerRun;
 
-  // Remove any unsubmitted kits tied to opportunities that were skipped or became unavailable
+  // Remove any unsubmitted kits tied to opportunities that were skipped, became unavailable, or are not India-eligible remote
   await query(
     `DELETE FROM applications WHERE status IN ('READY', 'DRAFT')
-     AND opportunity_id IN (SELECT id FROM opportunities WHERE status IN ('SKIPPED', 'UNAVAILABLE') OR tier = 'SKIP')`
+     AND opportunity_id IN (
+       SELECT id FROM opportunities
+       WHERE status IN ('SKIPPED', 'UNAVAILABLE')
+          OR tier = 'SKIP'
+          OR fit->'remote'->>'indiaEligible' NOT IN ('yes', 'likely')
+          OR fit->>'action' = 'OUTREACH ONLY'
+     )`
+  );
+  await query(
+    `UPDATE opportunities SET status = 'NEW'
+     WHERE status = 'APPLYING'
+       AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.opportunity_id = opportunities.id)`
   );
   await query(
     `DELETE FROM outreach WHERE status = 'DRAFT'
@@ -170,8 +188,9 @@ export async function autoPrepareQueue(
   );
 
   const where = qualifyingWhere(settings.preset);
+  const outreachWhere = outreachQualifyingWhere(settings.preset);
 
-  // Applications: best-fit first (tier → confirmed India eligibility → fit score), verified live before staging
+  // Applications: 100% India-eligible remote roles only (tier → confirmed India eligibility → fit score), verified live before staging
   let appsPrepared = 0;
   if (appsTarget > 0) {
     const candidates = await query<Opportunity>(
@@ -191,17 +210,23 @@ export async function autoPrepareQueue(
     appsPrepared = liveApps.length;
   }
 
-  // Outreach: one draft per company, founder-led / outreach-first roles first, verified live before staging
+  // Outreach: targets Remote Non-India roles ('OUTREACH ONLY' -> pitch India contractor) + top India-eligible startup roles
   let outreachPrepared = 0;
   if (outreachTarget > 0) {
     const outreachOpps = await query<Opportunity>(
       `SELECT o.* FROM opportunities o
-       WHERE o.status IN ('NEW','APPLYING') AND ${where}
+       WHERE o.status IN ('NEW','APPLYING','OUTREACH') AND ${outreachWhere}
          AND NOT EXISTS (
            SELECT 1 FROM outreach r
            WHERE r.opportunity_id = o.id OR LOWER(r.company_name) = LOWER(o.company_name)
          )
-       ORDER BY (CASE WHEN o.fit->>'action' LIKE '%OUTREACH%' THEN 0 ELSE 1 END), ${BEST_FIT_ORDER}
+       ORDER BY
+         (CASE
+            WHEN o.fit->>'action' = 'OUTREACH ONLY' THEN 0
+            WHEN o.fit->>'action' LIKE '%OUTREACH%' THEN 1
+            ELSE 2
+          END),
+         o.score DESC NULLS LAST
        LIMIT $1`,
       [outreachTarget * 3]
     );
@@ -230,6 +255,7 @@ export async function autoPrepareQueue(
 
 // ---------------- discovery ----------------
 export async function runDiscoveryAction() {
+  await rescoreAll();
   const r = await runDiscovery();
   const prep = await autoPrepareQueue();
   revalidatePath("/", "layout");
@@ -239,6 +265,7 @@ export async function runDiscoveryAction() {
 }
 
 export async function autoPrepareBatchAction() {
+  await rescoreAll();
   const prep = await autoPrepareQueue();
   revalidatePath("/", "layout");
   redirect(`/dashboard?apps=${prep.appsPrepared}&emails=${prep.outreachPrepared}`);

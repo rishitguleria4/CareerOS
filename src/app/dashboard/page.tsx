@@ -61,7 +61,7 @@ export default async function Dashboard({
       `SELECT o.id, o.title, o.company_name, o.location, o.tier, o.score, o.fit, o.seen_on
        FROM opportunities o
        LEFT JOIN applications a ON a.opportunity_id = o.id
-       WHERE o.status='NEW' AND o.verdict <> 'SKIP' AND a.id IS NULL
+       WHERE o.status='NEW' AND a.id IS NULL AND ${qualifyingWhere(MATCH_PRESETS.broad)}
        ORDER BY ${BEST_FIT_ORDER} LIMIT 10`
     ),
     query<any>(
@@ -257,9 +257,9 @@ export default async function Dashboard({
               Selection Priority
             </span>
             <select name="matchQuality" defaultValue={auto.quality} className={fieldCls}>
-              <option value="best">Best fit only — Tier S/A · Confirmed/Likely India remote · ≥75%</option>
-              <option value="strong">Strong fit — Tier S/A · India/Global/Remote · ≥70%</option>
-              <option value="broad">Broad fit — Tier S/A/B · ≥55%</option>
+              <option value="best">Best fit — Tier S/A · 100% Remote &amp; India-eligible · ≥75%</option>
+              <option value="strong">Strong fit — Tier S/A · 100% Remote &amp; India-eligible · ≥70%</option>
+              <option value="broad">Broad fit — Tier S/A/B · 100% Remote &amp; India-eligible · ≥58%</option>
             </select>
           </label>
 
@@ -476,6 +476,11 @@ export default async function Dashboard({
                       {o.job_title && <span className="text-xs text-muted-foreground">· {o.job_title}</span>}
                       {o.score && (
                         <span className="font-mono text-xs text-[var(--brand)] tnum">{o.score}% fit</span>
+                      )}
+                      {o.fit?.action === "OUTREACH ONLY" || o.fit?.remote?.cls === "regional" ? (
+                        <Pill tone="warn">Remote (Non-India) · Contractor Pitch</Pill>
+                      ) : (
+                        <Pill tone="good">India-Eligible Remote</Pill>
                       )}
                       <Pill>DRAFT</Pill>
                     </div>

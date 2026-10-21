@@ -15,12 +15,12 @@ import { cn } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 
 const VIEWS: { key: string; label: string; sub: string }[] = [
-  { key: "best", label: "Best Fit", sub: "Tier S/A · Confirmed/Likely India Remote · ≥75%" },
-  { key: "strong", label: "Strong Fit", sub: "Tier S/A · ≥70%" },
-  { key: "open", label: "All Qualifying", sub: "Tier S/A/B" },
-  { key: "outreach", label: "Outreach-First", sub: "Founder-led / high outreach signal" },
+  { key: "best", label: "Best Fit (India Remote)", sub: "Tier S/A · 100% Remote & Eligible from India · ≥75%" },
+  { key: "strong", label: "Strong (India Remote)", sub: "Tier S/A · 100% Remote & Eligible from India · ≥70%" },
+  { key: "open", label: "All India Remote", sub: "All 100% Remote roles eligible from India (Tier S/A/B)" },
+  { key: "outreach", label: "Remote · Non-India (Outreach)", sub: "Remote roles not open to India right now → pitch founder as contractor" },
   { key: "unavailable", label: "Closed / Unavailable", sub: "Removed from ATS board or 404/closed" },
-  { key: "skipped", label: "Filtered Out", sub: "Non-India onsite / US-only / Senior" },
+  { key: "skipped", label: "Filtered Out", sub: "All US/EU/India on-site, hybrid, or senior roles" },
 ];
 
 export default async function Jobs({
@@ -39,9 +39,11 @@ export default async function Jobs({
   } else if (view === "strong") {
     where.push(`o.status IN ('NEW','REVIEWING','APPLYING') AND ${qualifyingWhere(MATCH_PRESETS.strong)}`);
   } else if (view === "open") {
-    where.push("o.status IN ('NEW','REVIEWING','APPLYING') AND o.verdict <> 'SKIP'");
+    where.push(`o.status IN ('NEW','REVIEWING','APPLYING') AND ${qualifyingWhere(MATCH_PRESETS.broad)}`);
   } else if (view === "outreach") {
-    where.push("o.status IN ('NEW','REVIEWING','OUTREACH','APPLYING') AND o.fit->>'action' LIKE '%OUTREACH%'");
+    where.push(
+      `o.status IN ('NEW','REVIEWING','OUTREACH','APPLYING') AND o.verdict <> 'SKIP' AND (o.fit->>'action' = 'OUTREACH ONLY' OR o.fit->'remote'->>'cls' = 'regional' OR o.fit->>'action' LIKE '%OUTREACH%')`
+    );
   } else if (view === "unavailable") {
     where.push("o.status = 'UNAVAILABLE'");
   } else if (view === "skipped") {
@@ -64,8 +66,8 @@ export default async function Jobs({
     queryOne<any>(`SELECT
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','APPLYING') AND ${qualifyingWhere(MATCH_PRESETS.best)}) AS best,
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','APPLYING') AND ${qualifyingWhere(MATCH_PRESETS.strong)}) AS strong,
-      (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','APPLYING') AND o.verdict <> 'SKIP') AS open,
-      (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','OUTREACH','APPLYING') AND o.fit->>'action' LIKE '%OUTREACH%') AS outreach,
+      (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','APPLYING') AND ${qualifyingWhere(MATCH_PRESETS.broad)}) AS open,
+      (SELECT COUNT(*)::int FROM opportunities o WHERE o.status IN ('NEW','REVIEWING','OUTREACH','APPLYING') AND o.verdict <> 'SKIP' AND (o.fit->>'action' = 'OUTREACH ONLY' OR o.fit->'remote'->>'cls' = 'regional' OR o.fit->>'action' LIKE '%OUTREACH%')) AS outreach,
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status = 'UNAVAILABLE') AS unavailable,
       (SELECT COUNT(*)::int FROM opportunities o WHERE o.status = 'SKIPPED') AS skipped`),
   ]);
@@ -162,13 +164,16 @@ export default async function Jobs({
                   <Link href={`/jobs/${o.id}`} className={linkBtn + " h-7 px-2.5 text-[11px]"}>
                     Inspect
                   </Link>
-                  {o.tier !== "SKIP" && !["APPLYING", "APPLIED"].includes(o.status) && (
-                    <form action={startApplicationAction.bind(null, o.id)}>
-                      <Submit className="h-7 px-2.5 text-[11px]" pendingText="Building…">
-                        Prepare Kit
-                      </Submit>
-                    </form>
-                  )}
+                  {o.tier !== "SKIP" &&
+                    o.fit?.action !== "OUTREACH ONLY" &&
+                    o.fit?.remote?.indiaEligible !== "no" &&
+                    !["APPLYING", "APPLIED"].includes(o.status) && (
+                      <form action={startApplicationAction.bind(null, o.id)}>
+                        <Submit className="h-7 px-2.5 text-[11px]" pendingText="Building…">
+                          Prepare Kit
+                        </Submit>
+                      </form>
+                    )}
                   {o.tier !== "SKIP" && (
                     <form
                       action={async () => {

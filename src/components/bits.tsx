@@ -113,14 +113,19 @@ export function OppRow({
   right?: React.ReactNode;
 }) {
   const elig = o.fit?.remote?.indiaEligible;
+  const rCls = o.fit?.remote?.cls;
+  const isOutreachOnly = o.fit?.action === "OUTREACH ONLY" || rCls === "regional";
   const eligLabel =
     elig === "yes"
-      ? "India remote"
+      ? rCls === "india"
+        ? "India / APAC Remote"
+        : "Worldwide Remote"
       : elig === "likely"
-        ? "Worldwide remote"
-        : elig === "unknown"
-          ? "Remote (unverified)"
+        ? "Remote · India Eligible"
+        : isOutreachOnly
+          ? "Remote (Non-India) · Outreach Only"
           : null;
+  const eligTone = elig === "yes" ? "good" : elig === "likely" ? "info" : isOutreachOnly ? "warn" : "muted";
   const salaryNote = o.fit?.salary?.note && !o.fit.salary.note.startsWith("Not stated") ? o.fit.salary.note : null;
 
   return (
@@ -137,9 +142,7 @@ export function OppRow({
             >
               {o.title}
             </Link>
-            {eligLabel && (
-              <Pill tone={elig === "yes" ? "good" : elig === "likely" ? "info" : "muted"}>{eligLabel}</Pill>
-            )}
+            {eligLabel && <Pill tone={eligTone}>{eligLabel}</Pill>}
             {salaryNote && <Pill tone="good">{salaryNote}</Pill>}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">

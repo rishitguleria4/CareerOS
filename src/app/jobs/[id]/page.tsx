@@ -78,6 +78,10 @@ export default async function JobPage({
             <Link href={`/applications/${app.id}`} className={linkBtn}>
               Open Application Kit ({app.status}) →
             </Link>
+          ) : f?.action === "OUTREACH ONLY" || f?.remote?.indiaEligible === "no" ? (
+            <Pill tone="warn" className="h-8 px-3 text-xs">
+              Remote (Non-India) · Founder Outreach Only
+            </Pill>
           ) : (
             o.tier !== "SKIP" && (
               <form action={startApplicationAction.bind(null, o.id)}>

@@ -15,66 +15,104 @@ export function isRelevantTitle(title: string): boolean {
 }
 
 // ---------- remote / location ----------
-const STRICT_LOCK =
-  /\b(us citizens? only|u\.s\. citizens? only|security clearance|w-?2 only|no (international )?contractors|no c2c|(must|need to|required to) (currently )?(reside|live|be physically located) in the (us\b|u\.s\.|united states|uk\b|united kingdom|canada)|(authori[sz]ed|legally entitled) to work in the (us|u\.s\.|united states) without (visa )?sponsorship|remote\s*[-–(]\s*(us|u\.s\.|usa|uk|canada)\s+only\b|\bus[- ]only\b)/i;
+const GOV_CLEARANCE =
+  /\b(us citizens? only|u\.s\. citizens? only|security clearance|top secret|ts\/sci|itar|dod clearance|fedramp|public trust clearance)\b/i;
+
+const JD_REGIONAL_LOCK =
+  /\b(w-?2 only|no (international )?contractors|no c2c|(must|need to|required to) (currently )?(reside|live|be physically located|be based) in (the )?(us\b|u\.s\.|united states|uk\b|united kingdom|canada|europe|\beu\b|north america|americas)|(authori[sz]ed|legally entitled|eligible) to work in (the )?(us|u\.s\.|united states|uk|united kingdom|canada|eu|europe) without (visa )?sponsorship|remote\s*[-–(:]\s*(us|u\.s\.|usa|uk|canada|eu|europe|north america|latam|americas)\b|\b(us|u\.s\.|usa|eu|uk|canada)[- ]only\b|united states only|candidates (based|located) in (the )?(us|united states|uk|eu|europe|north america|canada) only)\b/i;
+
 const WORLDWIDE =
-  /worldwide|anywhere( in the world)?|global(ly)? remote|work from anywhere|remote[- ]?(global|first)|any ?time ?zone|international (candidates|contractors)|all countries|globally distributed|distributed team|\b(deel|rippling|b2b contract|independent contractor)\b/i;
-const INDIA = /\bindia\b|bangalore|bengaluru|hyderabad|mumbai|pune|delhi|gurgaon|gurugram|noida|chennai|kolkata|\bist\b|apac|asia/i;
-const REMOTE_WORD = /\bremote\b|work from home|wfh|fully distributed|telecommut/i;
-const HYBRID_ONSITE = /\bhybrid\b|on-?site|in[- ]office|in the office|relocat/i;
+  /worldwide|anywhere( in the world)?|global(ly)? remote|work from anywhere|remote[- ]?(global|first)|any ?time ?zone|international (candidates|contractors)|all countries|globally distributed|\b(deel|rippling|b2b contract|independent contractor)\b/i;
+const INDIA = /\bindia\b|bangalore|bengaluru|hyderabad|mumbai|pune|delhi|gurgaon|gurugram|noida|chennai|kolkata|\bist\b|apac|south asia/i;
+const REMOTE_WORD = /\b(remote|work from home|wfh|fully distributed|telecommut)\b/i;
+const HYBRID_ONSITE = /\b(hybrid|on-?site|in[- ]office|in the office|office[- ]based|relocat)\b/i;
 
 const NON_INDIA_LOC =
-  /\b(united states|u\.s\.a?\.?|\bus\b|canada|uk\b|united kingdom|england|london|germany|berlin|munich|france|paris|europe|\beu\b|emea|amer\b|americas|latam|latin america|australia|sydney|melbourne|japan|tokyo|dublin|ireland|amsterdam|netherlands|spain|madrid|barcelona|italy|poland|sweden|switzerland|zurich|israel|tel aviv|brazil|mexico|san francisco|new york|nyc|foster city|mountain view|palo alto|menlo park|sunnyvale|san jose|seattle|bellevue|austin|boston|chicago|los angeles|denver|atlanta|washington|toronto|vancouver|montreal)\b|,\s*(ca|ny|wa|tx|ma|il|co|ga|va|dc|fl|pa|oh|nc|on|bc)\b/i;
+  /\b(united states|u\.s\.a?\.?|\bus\b|\busa\b|canada|uk\b|united kingdom|england|london|germany|berlin|munich|france|paris|europe|\beu\b|emea|amer\b|americas|north america|latam|latin america|australia|sydney|melbourne|japan|tokyo|dublin|ireland|amsterdam|netherlands|spain|madrid|barcelona|italy|poland|sweden|stockholm|switzerland|zurich|israel|tel aviv|brazil|mexico|singapore|san francisco|bay area|silicon valley|new york|nyc|brooklyn|manhattan|foster city|mountain view|palo alto|menlo park|sunnyvale|san jose|santa clara|redwood city|san mateo|seattle|bellevue|austin|boston|cambridge|chicago|los angeles|santa monica|irvine|san diego|denver|boulder|atlanta|washington|arlington|miami|philadelphia|pittsburgh|toronto|vancouver|montreal|waterloo)\b|,\s*(ca|ny|wa|tx|ma|il|co|ga|va|dc|fl|pa|oh|nc|nj|mi|mn|az|or|ut|md|tn|on|bc)\b/i;
+
+const GLOBAL_REMOTE_SOURCES = new Set([
+  "himalayas",
+  "jobicy",
+  "workingnomads",
+  "weworkremotely",
+  "remoteok",
+  "remotive",
+]);
 
 export function analyzeRemote(job: RawJob) {
   const loc = (job.location ?? "").trim();
   const titleAndLoc = `${loc}\n${job.title}`;
   const head = `${titleAndLoc}\n${(job.description ?? "").slice(0, 6000)}`;
   const reasons: string[] = [];
-  const mentionsIndia = INDIA.test(head);
-  const worldwide = WORLDWIDE.test(head) || /\b(worldwide|anywhere|global)\b/i.test(loc);
+
+  const mentionsIndiaInLoc = INDIA.test(loc);
+  const mentionsIndiaInJd = INDIA.test(head);
+  const locWorldwide = /\b(worldwide|anywhere|global|all countries|international)\b/i.test(loc);
+  const worldwide = WORLDWIDE.test(head) || locWorldwide;
+
+  const locExplicitRemote = REMOTE_WORD.test(titleAndLoc) || locWorldwide;
+  const locExplicitOnsite = HYBRID_ONSITE.test(loc) && !locExplicitRemote;
+  const locHasPhysicalPlace =
+    (NON_INDIA_LOC.test(loc) || INDIA.test(loc) || (loc !== "" && !/^(yc startup|startup|engineering)$/i.test(loc))) &&
+    !locExplicitRemote;
+
+  // Strict Remote-Only gate:
+  // A role is remote ONLY if its location/title explicitly says Remote/Worldwide/Anywhere,
+  // OR it comes from a dedicated remote feed, OR it has no physical city/country in `loc` and states 100% remote in JD.
   const remote =
-    job.remoteFlag === true ||
-    REMOTE_WORD.test(titleAndLoc) ||
-    /\b(fully remote|100% remote|remote[- ]first|work from anywhere|remote role|remote position|remote team)\b/i.test(head);
-  const locHasNonIndia = NON_INDIA_LOC.test(loc) && !INDIA.test(loc) && !/\b(worldwide|anywhere|global)\b/i.test(loc);
-  const strictLock = STRICT_LOCK.test(head);
-  const onsiteOnly = !remote && (HYBRID_ONSITE.test(head) || locHasNonIndia || (loc !== "" && !/remote/i.test(loc)));
+    !locExplicitOnsite &&
+    (locExplicitRemote ||
+      GLOBAL_REMOTE_SOURCES.has(job.source.toLowerCase()) ||
+      (!locHasPhysicalPlace &&
+        (job.remoteFlag === true ||
+          /\b(100% remote|fully remote|work from anywhere|remote[- ]first)\b/i.test(head))));
+
+  const locHasNonIndia = NON_INDIA_LOC.test(loc) && !mentionsIndiaInLoc && !locWorldwide;
+  const govClearance = GOV_CLEARANCE.test(head);
+  const jdRegionalLock = JD_REGIONAL_LOCK.test(head);
 
   let cls: RemoteClass = "unknown";
   let eligible: "yes" | "likely" | "unknown" | "no" = "unknown";
   let note = "";
 
-  if (onsiteOnly && !mentionsIndia) {
+  if (!remote) {
+    // Hard Reject: On-site or hybrid roles (whether in US, EU, India, or anywhere else)
     cls = "onsite";
     eligible = "no";
-    note = `On-site/hybrid outside India (${loc || "unspecified location"})`;
-  } else if (strictLock && !worldwide && !mentionsIndia) {
+    note = loc
+      ? `On-site / hybrid (${loc}) — Remote-only filter`
+      : "On-site / non-remote role — Remote-only filter";
+  } else if (govClearance) {
+    // Hard Reject: Defense / security clearance roles
     cls = "restricted";
     eligible = "no";
-    note = "Strict US/local work authorization or citizenship lock";
-  } else if (remote && mentionsIndia) {
+    note = "Requires US citizenship / government security clearance";
+  } else if (mentionsIndiaInLoc || (mentionsIndiaInJd && !locHasNonIndia && !jdRegionalLock)) {
+    // Lane 1A: Explicitly open to Remote from India / APAC
     cls = "india";
     eligible = "yes";
-    note = "Remote · India / APAC explicitly included";
-  } else if (remote && worldwide) {
+    note = "Remote · Eligible from India / APAC";
+  } else if (locWorldwide || (worldwide && !locHasNonIndia && !jdRegionalLock)) {
+    // Lane 1B: Explicitly Worldwide / Global Remote
     cls = "worldwide";
     eligible = "yes";
-    note = "Global / location-agnostic remote";
-  } else if (remote) {
+    note = "Remote · Worldwide / India-eligible";
+  } else if (!locHasNonIndia && !jdRegionalLock) {
+    // Lane 1C: Pure location-agnostic Remote with no US/EU residency lock
     cls = "remote";
     eligible = "likely";
-    note = locHasNonIndia
-      ? `US/EU remote (${loc}) · open to remote overlap`
-      : "Remote · US/EU startup (contractor-friendly)";
-  } else if (mentionsIndia) {
-    cls = "onsite";
-    eligible = "likely";
-    note = `India (${loc || "see JD"})`;
+    note = "Remote · Location-agnostic (India eligible)";
   } else {
-    note = "Location unclear";
+    // Lane 2: Genuinely Remote work, but currently restricted to US/EU/non-India -> Founder Outreach target!
+    cls = "regional";
+    eligible = "no";
+    const regionLabel = loc ? loc.replace(/^Remote\s*[-–·(]?\s*/i, "").replace(/\)$/, "").trim() : "US/EU";
+    note = `Remote (${regionLabel || "US/EU only right now"}) · Not India-eligible → Outreach target`;
   }
-  if (strictLock && (worldwide || mentionsIndia)) reasons.push("Mentions work auth alongside worldwide/India");
+
+  if (jdRegionalLock && (worldwide || mentionsIndiaInJd)) {
+    reasons.push("Mentions regional work auth alongside global/India keywords");
+  }
   return { cls, eligible, note, mixed: reasons.length > 0 };
 }
 
@@ -161,7 +199,7 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
 
   // ---- hard constraints (never rescued by score) ----
   if (remote.cls === "restricted") hardReasons.push(remote.note);
-  if (remote.cls === "onsite" && remote.eligible === "no") hardReasons.push(remote.note);
+  if (remote.cls === "onsite") hardReasons.push(remote.note);
   if (exp.kind === "required" && (exp.years ?? 0) >= 3) hardReasons.push(`${exp.years}+ years required`);
   if (seniorTitle) hardReasons.push(`Senior-level title: "${job.title}"`);
   if (!isRelevantTitle(job.title)) hardReasons.push("Not an engineering role you target");
@@ -195,12 +233,25 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
     profile.targetRoles.some((r) => new RegExp(escapeRole(r), "i").test(job.title));
   if (roleHit) technical = Math.min(100, technical + 10);
 
+  if (remote.cls === "regional" && technical < 52) {
+    hardReasons.push("Non-India remote role with low technical stack overlap");
+  }
+
   // ---- component scores ----
   const experience =
     exp.kind === "none" ? 100 : exp.kind === "preferred" ? 85 : (exp.years ?? 0) <= 1 ? 90 : (exp.years ?? 0) === 2 ? 60 : 10;
   const remoteScore =
-    remote.cls === "india" ? 100 : remote.cls === "worldwide" ? 100 : remote.cls === "remote" ? 88 : remote.cls === "onsite" ? (remote.eligible === "likely" ? 45 : 0) : remote.cls === "restricted" ? 0 : 40;
-  const location = remote.eligible === "yes" ? 100 : remote.eligible === "likely" ? 92 : remote.eligible === "unknown" ? 60 : 0;
+    remote.cls === "india"
+      ? 100
+      : remote.cls === "worldwide"
+      ? 100
+      : remote.cls === "remote"
+      ? 92
+      : remote.cls === "regional"
+      ? 72
+      : 0;
+  const location =
+    remote.eligible === "yes" ? 100 : remote.eligible === "likely" ? 94 : remote.cls === "regional" ? 35 : 0;
 
   const src = job.source.toLowerCase();
   const startup = STARTUP.test(text) || /yc|hn|workatastartup|ashby|workable|arbeitnow/.test(src);
@@ -252,6 +303,7 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
   if (broadOwnership) outreach += 10;
   if (exp.kind === "none") outreach += 10;
   if (juniorTitle) outreach += 5;
+  if (remote.cls === "regional") outreach = Math.min(100, outreach + 10);
   outreach = Math.min(100, outreach);
 
   if (startup) signals.push("Early-stage / startup signals");
@@ -259,6 +311,7 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
   if (juniorTitle) signals.push("Early-career / junior title");
   if (exp.kind === "none") signals.push("No years-of-experience gate");
   if (roleHit) signals.push("Matches primary target role");
+  if (remote.cls === "regional") signals.push("Remote (Non-India) → Pitch founder as India remote contractor");
   if (remote.mixed) signals.push("US auth mentioned alongside worldwide/India — verify");
 
   const blended =
@@ -274,13 +327,19 @@ export function analyzeJob(job: RawJob, profile: Profile): FitReport {
     verdict = "SKIP";
     tier = "SKIP";
     action = "SKIP";
+  } else if (remote.cls === "regional") {
+    // Lane 2: Remote work exists, but currently not for India -> Founder Outreach Only (never direct portal apply)
+    verdict = "MAYBE";
+    tier = score >= 74 ? "A" : "B";
+    action = "OUTREACH ONLY";
   } else {
-    const uncertain = remote.eligible === "unknown" || remote.cls === "onsite" || remote.mixed;
+    // Lane 1: Remote & Eligible from India (yes / likely)
+    const uncertain = remote.eligible !== "yes" && remote.eligible !== "likely";
     if (score >= 82 && startup && !uncertain) tier = "S";
-    else if (score >= 72) tier = "A";
+    else if (score >= 72 && !uncertain) tier = "A";
     else if (score >= 55) tier = "B";
     else tier = "C";
-    verdict = tier === "S" || (tier === "A" && !uncertain) ? "PASS" : "MAYBE";
+    verdict = tier === "S" || tier === "A" ? "PASS" : "MAYBE";
     const weakTitle = !roleHit && !juniorTitle;
     const outreachFirst = startup && (weakTitle || exp.kind === "required") && technical >= 55;
     if (tier === "S") action = "APPLY + OUTREACH";
